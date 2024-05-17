@@ -65,7 +65,7 @@ def isvideo(path: str) -> bool:
         return False
 
 def concat_rid(plat: str, rid: str) -> str:
-    if plat == 'bilibili':
+    if plat in ['bilibili', 'douyin']:
         url = f'https://live.{plat}.com/{str(rid)}'
     elif plat == 'cc':
         url = f'https://cc.163.com/{str(rid)}'

@@ -36,6 +36,7 @@ class StreamlinkDownloader():
         self.segment_callback = segment_callback
         self.kwargs = kwargs
 
+        self.advanced_video_args = kwargs.get('advanced_video_args', {})
         self.logger = logging.getLogger(__name__)
         self.stoped = False
     
@@ -43,15 +44,16 @@ class StreamlinkDownloader():
         raw_name = join(self.output_dir, f'[正在录制]{self.taskname}-{time.strftime("%Y%m%d%H%M%S",time.localtime())}-Part%03d-{self.uuid}.{self.output_format}')
 
         port = random.randint(10000, 65535)
+        streamlink_extra_args = self.advanced_video_args.get('streamlink_extra_args') or []
         streamlink_args = [
             "streamlink",
             "--player-external-http",  # 为外部程序提供流媒体数据
-            "--twitch-disable-ads",                     # 去广告，去掉、跳过嵌入的广告流
-            "--twitch-disable-reruns",  # 如果该频道正在重放回放，不打开流
             "--player-external-http-port", str(port),  # 对外部输出流的端口
+            *streamlink_extra_args,
             self.url, "best"  # 流链接
         ]
         self.logger.debug(f'{self.taskname} streamlink args: {streamlink_args}')
+
         ffmpeg_args = [
             ToolsList.get('ffmpeg'),
             "-i", f"http://localhost:{port}",

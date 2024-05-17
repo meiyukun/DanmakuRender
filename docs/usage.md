@@ -73,6 +73,8 @@ render_args:
   # 也可以指定为当前视频的大小倍数，例如 1.5
   output_resize: ~
 ```
+**关于视频码率**：渲染得到的视频默认是15M码率，大约是一个小时7GB，如果觉得视频文件太大可以按比例减小码率，推荐渲染码率设置为原视频的1.2-1.5倍左右。
+
 **关于硬件加速**：使用硬件加速编码遇到渲染失败问题，首先检查显卡驱动有没有更新！    
 
 **关于输出重缩放**：很多人发现视频上传B站之后变糊（尤其是带弹幕的视频），但是本地看又很清晰，主要原因是B站现在对视频的码率做了限制，普通1080P视频码率一般不超过2Mbps(AV1编码)，只有直播的五分之一。   
@@ -166,6 +168,17 @@ src_video:
     ...
 ```
 
+```yaml
+# 可以将多种不同类的视频上传到同一个视频下
+# 这里的例子是弹幕视频和原视频
+src_video+dm_video:
+  # 上传目标，目前只能是bilibili
+  target: bilibili
+  # 接下来的参数在B站上传参数下选择（详情参考 全局上传参数列表）
+  account: smallpeach
+  ...
+```
+
 **自动清理的配置格式说明**      
 和上传设置类似，自动清理也分为三个部分，每个视频类型可以指定一个或者多个上传任务，组成一个数组。特别地，如果只上传一个地方，则可以直接指定参数，不必使用数组。如果不指定文件类型，将会应用到全部三种文件（example.yml文件就是这样），示例如下：
 ```yaml
@@ -242,9 +255,10 @@ download_args:
     output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
     # 录播分段时间（秒），默认一个小时
     segment: 3600
-    # 录制程序引擎，可选ffmpeg或者streamgears
+    # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
     # 在使用streamgears作为录制引擎时，录制视频格式可能会根据直播流的不同而不同
     # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
+    # 录制twitch等特殊平台建议使用streamlink
     engine: ffmpeg
     # 是否录制弹幕
     danmaku: True
@@ -254,7 +268,7 @@ download_args:
     # 使用这个功能可以把主播短暂下播又开播认定为同一场直播
     stop_wait_time: 5
     # 录制视频的格式，默认flv
-    vid_format: flv
+    output_format: flv
     # 直播流选项
     stream_option:
       # 直播流CDN
@@ -283,10 +297,16 @@ download_args:
                             '-thread_queue_size', '16']
       # ffmpeg输出参数(仅ffmpeg下载引擎生效)
       ffmpeg_output_args: [ '-movflags','faststart+frag_keyframe+empty_moov']
-      # 检测流变化(仅ffmpeg下载引擎生效)
-      check_stream_changes: false
       # 禁用下载速度慢时自动重启(仅ffmpeg下载引擎生效)
       disable_lowspeed_interrupt: false
+      # streamlink 额外输入参数
+      # 可用参数列表请参考 https://streamlink.github.io/cli.html
+      # 一个典型的使用方法是添加一个--twitch-api-header参数，用于取消twitch直播流的广告
+      # 特别提醒，使用此方法传入参数会在日志文件中明文显示，如果需要共享日志文件请确保删除了敏感信息！
+      streamlink_extra_args: [
+        "--twitch-disable-ads",     # 去广告，去掉、跳过嵌入的广告流
+        "--twitch-disable-reruns",  # 如果该频道正在重放回放，不打开流
+      ]
 
     # 以下是弹幕录制参数
     # 弹幕录制格式，只能选择ass

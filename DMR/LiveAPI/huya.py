@@ -159,9 +159,12 @@ class huya(BaseAPI):
             if stream_type and url_info['stream_type'] != stream_type:
                 continue
             uri = url_info['stream_url']
-            if 'direct' not in uri and self.sess.get(url=uri, headers=self.header_mobile, stream=True, timeout=3).status_code == 200:
-                selected_urls.append(uri)
-                break
+            try:
+                if 'direct' not in uri and self.sess.get(url=uri, headers=self.header_mobile, stream=True, timeout=3).status_code == 200:
+                    selected_urls.append(uri)
+                    break
+            except Exception as e:
+                pass
         
         if not selected_urls:
             logging.warning(f'虎牙{self.rid}没有满足 {stream_cdn},{stream_type} 的流，将使用默认选项.')

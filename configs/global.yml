@@ -29,9 +29,10 @@ download_args:
     output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
     # 录播分段时间（秒），默认一个小时
     segment: 3600
-    # 录制程序引擎，可选ffmpeg或者streamgears
+    # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
     # 在使用streamgears作为录制引擎时，录制视频格式可能会根据直播流的不同而不同
     # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
+    # 录制twitch等特殊平台建议使用streamlink
     engine: ffmpeg
     # 是否录制弹幕
     danmaku: True
@@ -70,10 +71,16 @@ download_args:
                             '-thread_queue_size', '16']
       # ffmpeg输出参数(仅ffmpeg下载引擎生效)
       ffmpeg_output_args: [ '-movflags','faststart+frag_keyframe+empty_moov']
-      # 检测流变化(仅ffmpeg下载引擎生效)
-      check_stream_changes: false
       # 禁用下载速度慢时自动重启(仅ffmpeg下载引擎生效)
       disable_lowspeed_interrupt: false
+      # streamlink 额外输入参数
+      # 可用参数列表请参考 https://streamlink.github.io/cli.html
+      # 一个典型的使用方法是添加一个--twitch-api-header参数，用于取消twitch直播流的广告
+      # 特别提醒，使用此方法传入参数会在日志文件中明文显示，如果需要共享日志文件请确保删除了敏感信息！
+      streamlink_extra_args: [
+        "--twitch-disable-ads",     # 去广告，去掉、跳过嵌入的广告流
+        "--twitch-disable-reruns",  # 如果该频道正在重放回放，不打开流
+      ]
 
     # 以下是弹幕录制参数
     # 弹幕录制格式，只能选择ass
@@ -109,6 +116,9 @@ download_args:
       # 用户名称过滤，只有用户名称完全与发弹幕的用户名相同才会过滤
       # 此功能暂不生效
       username: ~
+    # 弹幕模板（此功能暂不生效）
+    dm_template:
+      danmaku: 
     # 高级弹幕录制参数
     # 请注意此参数随时可能删减，正常情况下不应该修改
     advanced_dm_args:
