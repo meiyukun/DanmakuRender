@@ -14,49 +14,30 @@ class Huya(DMAPI):
 
     async def get_ws_info(url):
         reg_datas = []
-        url = "https://m.huya.com/" + split_url(url)[1]
-        headers = {
-            "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Mobile Safari/537.36"
-        }
+        room_id = split_url(url)[1]
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
+            async with session.get(f'https://www.huya.com/{room_id}', headers=Huya.headers, timeout=5) as resp:
                 room_page = await resp.text()
-                # print(room_page)
-                m = re.search(r"window.HNF_GLOBAL_INIT *= *(\{.+?\})\s*</script>", room_page, re.MULTILINE)
-                j = json.loads(m.group(1))
-                ayyuid = j["roomInfo"]["tProfileInfo"]["lUid"]
-                # tid = j["roomInfo"]["tLiveInfo"]["tLiveStreamInfo"]["vStreamInfo"]["value"][0]["lChannelId"]
-                # sid = j["roomInfo"]["tLiveInfo"]["tLiveStreamInfo"]["vStreamInfo"]["value"][0]["lSubChannelId"]
+                ayyuid = re.search(r"yyid\":\"?(\d+)\"?", room_page).group(1)
+                tid = re.search(r"lChannelId\":\"?(\d+)\"?", room_page).group(1)
+                sid = re.search(r"lSubChannelId\":\"?(\d+)\"?", room_page).group(1)
 
-                # print(ayyuid)
-                # print(tid)
-                # print(sid)
-
-        # a = tarscore.string
-
-        l = tarscore.vctclass(tarscore.string)()
-        l.append(f"live:{ayyuid}")
-        l.append(f"chat:{ayyuid}")
         oos = tarscore.TarsOutputStream()
-        oos.write(tarscore.vctclass(tarscore.string), 0, l)
-        oos.write(tarscore.string, 1, "")
-
-        # oos.write(tarscore.int64, 0, int(ayyuid))
-        # oos.write(tarscore.boolean, 1, True)  # Anonymous
-        # oos.write(tarscore.string, 2, "")  # sGuid
-        # oos.write(tarscore.string, 3, "")
-        # oos.write(tarscore.int64, 4, int(tid))
-        # oos.write(tarscore.int64, 5, int(sid))
-        # oos.write(tarscore.int64, 6, 0)
-        # oos.write(tarscore.int64, 7, 0)
-
+        oos.write(tarscore.int64, 0, int(ayyuid))
+        oos.write(tarscore.boolean, 1, True)  # Anonymous
+        oos.write(tarscore.string, 2, "")  # sGuid
+        oos.write(tarscore.string, 3, "")
+        oos.write(tarscore.int64, 4, int(tid))
+        oos.write(tarscore.int64, 5, int(sid))
+        oos.write(tarscore.int64, 6, 0)
+        oos.write(tarscore.int64, 7, 0)
 
         wscmd = tarscore.TarsOutputStream()
-        wscmd.write(tarscore.int32, 0, 16)
-        # wscmd.write(tarscore.int32, 0, 1)
+        wscmd.write(tarscore.int32, 0, 1)
         wscmd.write(tarscore.bytes, 1, oos.getBuffer())
 
         reg_datas.append(wscmd.getBuffer())
+
         return "wss://cdnws.api.huya.com/", reg_datas
 
     def decode_msg(data):
