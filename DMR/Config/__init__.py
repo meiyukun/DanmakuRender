@@ -2,6 +2,7 @@ import os
 import glob
 import yaml
 
+from copy import deepcopy
 from typing import List
 from DMR.utils import *
 
@@ -20,7 +21,7 @@ class Config():
         else:
             self.replay_config_path = replay_config_path
         
-        self.global_config = self._base_config.copy()
+        self.global_config = deepcopy(self._base_config)
         self.replay_config = {}
 
         with open(global_config_path, 'r', encoding='utf-8') as f:
@@ -48,16 +49,16 @@ class Config():
             replay_config = {}
             # self.replay_config[taskname] = replay_config
             common_args = _replay_config.get('common_event_args')
-            replay_config['common_event_args'] = common_args.copy()
+            replay_config['common_event_args'] = deepcopy(common_args)
             
             global_download_args = self.global_config['download_args']
             dltype = _replay_config.get('download_args', {}).get('dltype', 'live')
-            replay_config['download_args'] = global_download_args[dltype].copy()
+            replay_config['download_args'] = deepcopy(global_download_args[dltype])
             if _replay_config.get('download_args'):
                 replay_config['download_args'].update(_replay_config.get('download_args'))
             
             if common_args.get('auto_render') or common_args.get('auto_transcode'):
-                replay_config['render_args'] = self.global_config['render_args'].copy()
+                replay_config['render_args'] = deepcopy(self.global_config['render_args'])
                 if _replay_config.get('render_args'):
                     for key in self.global_config['render_args'].keys():
                         if _replay_config['render_args'].get(key):
@@ -77,7 +78,7 @@ class Config():
                             target = upload_arg.get('target', 'bilibili')
                             if not global_upload_args.get(target):
                                 raise ValueError(f'不存在可用的上传目标 {target}.')
-                            upload_config = global_upload_args[target].copy()
+                            upload_config = deepcopy(global_upload_args[target])
                             upload_config.update(upload_arg)
                             replay_config['upload_args'][upload_file_types].append(upload_config)
 
@@ -95,11 +96,11 @@ class Config():
                             continue
                         if not global_clean_args.get(method):
                             raise ValueError(f'不存在可用的清理方法 {method}.')
-                        clean_config = global_clean_args[method].copy()
+                        clean_config = deepcopy(global_clean_args[method])
                         clean_config.update(clean_arg)
                         replay_config['clean_args'][clean_file_types].append(clean_config)
 
-            self.replay_config[taskname] = replay_config.copy()
+            self.replay_config[taskname] = deepcopy(replay_config)
 
     def get_config(self, name):
         return self.global_config.get(name)
