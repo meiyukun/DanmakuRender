@@ -22,8 +22,10 @@ download_args:
   output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
   # 录播分段时间（秒），默认一个小时
   segment: 600
-  # 录制程序引擎，可选ffmpeg或者streamgears
+  # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
   # 在使用streamgears作为录制引擎时，录制视频格式可能会根据直播流的不同而不同
+  # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
+  # 录制twitch等特殊平台建议使用streamlink
   engine: ffmpeg
   # 是否录制弹幕
   danmaku: True
@@ -42,7 +44,7 @@ download_args:
   margin_h: 6
   # 弹幕左右间距，设置为-1表示允许弹幕叠加，设置为0-1的表示间距为视频宽度的倍数，设置为大于1的数表示像素，默认0.05
   # 实际上这个东西就是弹幕密度，弹幕左右间距越大密度越小
-  margin_w: 0.05
+  margin_w: 12
   # 指定弹幕占屏幕的最大比例（即屏幕上半部分有多少可以用来显示弹幕），默认为0.4
   dmrate: 0.4
   # 指定弹幕字体，默认为微软雅黑字体(Microsoft YaHei)

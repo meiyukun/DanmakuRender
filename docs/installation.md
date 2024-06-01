@@ -62,6 +62,12 @@ sudo apt-get install ffmpeg
 5. 安装biliup-rs        
 方法类似Windows安装，下载时选择Linux的预编译版本        
 
+6. 安装JavaScript解释器           
+在录制斗鱼弹幕时需要JavaScript解释器，部分Linux并没有预装，需要手动安装（这里以nodejs为例）：
+```shell
+sudo apt install nodejs npm
+```
+
 ## 备注     
 - 如果需要使用硬件加速，请根据显卡类型自行前往官网下载最新的驱动程序，**渲染失败的最可能原因是没安装最新显卡驱动！**        
 - DMR录制斗鱼弹幕的功能目前无法工作在Python 3.10以上，如果有需要的话请使用Python 3.9版本。        

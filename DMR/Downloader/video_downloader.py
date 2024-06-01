@@ -87,3 +87,9 @@ class VideoDownloadTask():
         t = threading.Thread(target=self.start_helper, daemon=True)
         t.start()
         return t
+
+    def stop(self):
+        if self.downloader:
+            self.downloader.stop()
+        self._pipeSend(event='info', msg=f'下载任务 {self.taskname} 已经停止.', dtype='str', data=self.taskname)
+        
