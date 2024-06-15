@@ -64,24 +64,17 @@ class StreamgearsDownloader():
             self.streamgears_proc.wait()
             return
 
-        with tempfile.TemporaryFile() as logfile:
+        with tempfile.TemporaryFile(dir='.temp') as logfile:
         # with open('.temp/test.log', 'wb') as logfile:
             self.streamgears_proc = subprocess.Popen(streamgears_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT, bufsize=10**8)
-            self.lastfile = None
             while not self.stoped:
                 if self.streamgears_proc.poll() is not None:
                     break
 
                 files = sorted(glob.glob(join(self.output_dir, f'*{self.uuid}*')))
-                try:
-                    pos = files.index(self.lastfile)
-                except ValueError:
-                    pos = -1
-                # 最后一个文件是正在录制的不能认为是录制好的，这里要-2
-                if pos < len(files)-2:
-                    for p in range(pos+1, len(files)-1):
-                        self.lastfile = files[p]
-                        self.segment_callback(self.lastfile)
+                # 最后一个文件不算在内
+                for p in range(len(files)-1):
+                    self.segment_callback(files[p])
                 time.sleep(10)
             
             if not self.stoped and Onair(self.url):
@@ -106,14 +99,7 @@ class StreamgearsDownloader():
                 self.logger.debug(f'{self.taskname} streamgears: {out}')
 
         files = sorted(glob.glob(join(self.output_dir, f'*{self.uuid}*')))
-        try:
-            pos = files.index(self.lastfile)
-        except ValueError:
-            pos = -1
-        # 结束时最后一个文件也要算在内
-        if pos < len(files)-1:
-            for p in range(pos+1, len(files)):
-                self.lastfile = files[p]
-                self.segment_callback(self.lastfile)
+        for p in range(len(files)):
+            self.segment_callback(files[p])
         
         self.logger.debug('Stream-gears downloader stoped.')

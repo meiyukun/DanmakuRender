@@ -113,7 +113,7 @@ def main():
         os.makedirs(os.path.dirname(output), exist_ok=True)
 
         target_render = TargetRender(debug=True, **render_args)
-        status, info = target_render.render_one(video=video, output=output)
+        status, info = target_render.render_one(video=video, output=task['output'])
 
         if status:
             logging.info(f'渲染完成: {video.path} -> {output}')

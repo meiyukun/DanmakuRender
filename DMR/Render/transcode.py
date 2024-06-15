@@ -72,6 +72,10 @@ class Transcoder(BaseRender):
     def render_one(self, video: VideoInfo, output: str, **kwargs):
         if not exists(video.path):
             raise RuntimeError(f'不存在视频文件 {video}，跳过渲染.')
+        valid_output = safe_filename(output)
+        if valid_output != output:
+            self.logger.warn(f'输出文件名 {output} 不合法或已存在，已更改为 {valid_output}.')
+            output = valid_output   
 
         start_time = datetime.now()
         status, info = self.render_helper(video.path, output, **kwargs)
