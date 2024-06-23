@@ -87,6 +87,11 @@ class StreamDownloadTask():
         if self.room_info is None or not exists(filename):
             self.logger.debug(f'No video file {filename}')
             return 
+
+        duration = datetime.now().timestamp()-self.segment_start_time.timestamp()
+        # 如果视频时长小于60秒，尝试使用ffprobe获取视频时长
+        if duration < 60:
+            duration = max(duration, FFprobe.get_duration(filename))
         
         video_info = VideoInfo(
             file_id=uuid(),
@@ -96,7 +101,7 @@ class StreamDownloadTask():
             segment_id=0,
             size=os.path.getsize(filename),
             ctime=self.segment_start_time,
-            duration=datetime.now().timestamp()-self.segment_start_time.timestamp(),
+            duration=duration,
             resolution=(self.width, self.height),
             title=self.room_info['title'],
             streamer=self.streamer_info,
@@ -107,6 +112,7 @@ class StreamDownloadTask():
         _file = rename_safe(filename, newfile)
         if _file:
             newfile = _file
+            self.logger.debug(f'Rename video file {filename} to {newfile}.')
         else:
             newfile = filename
             self.logger.error(f'视频 {newfile} 分段失败，将使用默认名称 {filename}.')

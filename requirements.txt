@@ -1,6 +1,7 @@
 requests
 aiohttp
 pyexecjs
+jsengine
 lxml
 pyyaml
 stream-gears

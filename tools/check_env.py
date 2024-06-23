@@ -30,6 +30,7 @@ def check_pypi():
         import requests
         import aiohttp
         import execjs
+        import jsengine
         import lxml
         import yaml
         import stream_gears
