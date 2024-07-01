@@ -268,11 +268,9 @@ dmr_engine_args:
   # 选择组件
   enabled_plugins: ['downloader', 'render', 'uploader', 'cleaner']
   # 是否动态更新配置文件
-  # 如果启用此项，程序将自动更新配置文件（也就是可以在运行时添加任务）
-  dynamic_config: False
+  dynamic_config: True
   # 动态更新的配置文件路径
-  # 程序将自动更新此文件夹下的配置文件
-  dynmaic_config_path: ./configs
+  dynamic_config_path: ./configs
 
 # 默认下载参数
 download_args:
@@ -365,6 +363,13 @@ download_args:
     outlinecolor: 000000
     # 弹幕描边宽度
     outlinesize: 1.0
+    # 弹幕流选项
+    dm_stream_option:
+      # 用于获取抖音弹幕流的cookies，用于特殊情况下录制抖音弹幕(https://github.com/SmallPeaches/DanmakuRender/issues/258)
+      # 格式：'__ac_nonce=xxx; __ac_signature=xxx; sessionid=xxx'
+      # 特别提醒，使用此方法传入参数会在日志文件中明文显示，如果需要共享日志文件请确保删除了敏感信息！
+      # 推荐设置为cookies所在的json文件，这样cookies就不会明文显示，json文件应该为cookies字典：{'__ac_nonce': xxx, ...}
+      douyin_dm_cookies: __ac_nonce=xxx; __ac_signature=xxx; sessionid=xxx
     # 弹幕过滤规则，满足其中任意条件的弹幕将被过滤
     dm_filter:
       # 关键字过滤，只要有关键字的弹幕都会被过滤
@@ -373,6 +378,9 @@ download_args:
       # 用户名称过滤，只有用户名称完全与发弹幕的用户名相同才会过滤
       # 此功能暂不生效
       username: ~
+    # 弹幕模板（此功能暂不生效）
+    dm_template:
+      danmaku: 
     # 高级弹幕录制参数
     # 请注意此参数随时可能删减，正常情况下不应该修改
     advanced_dm_args:
@@ -439,16 +447,16 @@ download_args:
 # 渲染器核心参数
 render_kernel_args:
   # 指定同时执行的渲染任务数，默认1
-  # 一般情况下此值不应该超过5
+  # 一般情况下此值不应该超过5（最好是不修改）
   nrenders: 1
 
 # 渲染器默认参数
 render_args:
   # 弹幕渲染
   dmrender:
-    # 渲染输出文件夹，默认为在录制输出文件夹后面加上“带弹幕版”
+    # 渲染输出文件夹，默认为在录制输出文件夹后面加上“弹幕版”
     output_dir: ~
-    # 渲染文件名称，默认在录制文件后面加上“带弹幕版”
+    # 渲染文件名称，默认在录制文件后面加上“弹幕版”
     output_name: ~
     # 生成的视频文件格式，默认mp4
     format: mp4
@@ -468,16 +476,14 @@ render_args:
     # 高级渲染参数
     # 请注意此参数随时可能删减，正常情况下不应该修改
     advanced_render_args:
-      # 指定输出帧率。此选项不同于'-r'，这里的帧率将直接作用在video filter上，默认保持原视频帧率
-      fps: ~
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
       filter_complex: subtitles=filename='{DANMAKU}'
   # 原视频转码
   transcode:
-    # 渲染输出文件夹，默认为在录制输出文件夹后面加上“带弹幕版”
+    # 渲染输出文件夹，默认为在录制输出文件夹后面加上“转码后”
     output_dir: ~
-    # 渲染文件名称，默认在录制文件后面加上“带弹幕版”
+    # 渲染文件名称，默认在录制文件后面加上“转码后”
     output_name: ~
     # 生成的视频文件格式，默认mp4
     format: mp4

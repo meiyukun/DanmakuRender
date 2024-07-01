@@ -108,6 +108,13 @@ download_args:
     outlinecolor: 000000
     # 弹幕描边宽度
     outlinesize: 1.0
+    # 弹幕流选项
+    dm_stream_option:
+      # 用于获取抖音弹幕流的cookies，用于特殊情况下录制抖音弹幕(https://github.com/SmallPeaches/DanmakuRender/issues/258)
+      # 格式：'__ac_nonce=xxx; __ac_signature=xxx; sessionid=xxx'
+      # 特别提醒，使用此方法传入参数会在日志文件中明文显示，如果需要共享日志文件请确保删除了敏感信息！
+      # 推荐设置为cookies所在的json文件，这样cookies就不会明文显示，json文件应该为cookies字典：{'__ac_nonce': xxx, ...}
+      douyin_dm_cookies: ~
     # 弹幕过滤规则，满足其中任意条件的弹幕将被过滤
     dm_filter:
       # 关键字过滤，只要有关键字的弹幕都会被过滤

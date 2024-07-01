@@ -15,7 +15,7 @@ from os.path import exists, splitext
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append('./tools')
 
-VERSION = '2024.05.30'
+VERSION = '2024.06.30'
 
 from DMR import DanmakuRender
 from DMR.Config import Config
