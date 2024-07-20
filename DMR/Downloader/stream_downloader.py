@@ -35,7 +35,7 @@ class StreamDownloadTask():
         self.url = url
         self.plat, self.rid = split_url(url)
         self.liveapi = LiveAPI(url)
-        self.output_dir = output_dir
+        self.output_dir = output_dir or './' + self.taskname
         self.output_format = output_format
         self.output_name = output_name
         self.send_queue = send_queue

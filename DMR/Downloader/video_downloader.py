@@ -24,7 +24,7 @@ class VideoDownloadTask():
         ) -> None:
         self.taskname = taskname
         self.url = url
-        self.output_dir = output_dir
+        self.output_dir = output_dir or './' + self.taskname
         self.output_name = output_name
         self.send_queue = send_queue
         self.debug = debug

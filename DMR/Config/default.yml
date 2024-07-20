@@ -27,7 +27,7 @@ download_args:
   live:
     # 直播间链接
     url: ''
-    # 录制输出文件夹，设置为空则使用主播名称作为文件夹
+    # 录制输出文件夹，设置为空则使用任务名称作为文件夹
     output_dir: ./直播回放
     # 录制文件名称格式，可使用关键字替换，默认效果：飞天狙想要努力变胖-2023年3月1日20点30分，注意这里不能含有冒号，斜杠等非法字符！！
     output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
