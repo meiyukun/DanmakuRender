@@ -46,15 +46,24 @@ def main():
     render_args = config.global_config.get('render_args', {}).get(args.mode, '')
     render_kernel_args = config.global_config.get('render_kernel_args', {})
     assert render_args, f'请在 global.yml 中配置 {args.mode} 的参数'
+    mode = args.mode
 
     for _, vname in enumerate(videos):
         danmu = os.path.splitext(vname)[0] + '.ass'
         fmt = render_args.get('format', 'mp4')
-        filename = os.path.splitext(os.path.basename(vname))[0] + f"（弹幕版）.{fmt}"
-        if args.output_dir:
-            output_dir = args.output_dir
-        else:
-            output_dir = os.path.dirname(vname)+'（弹幕版）'
+        if mode == 'dmrender':
+            filename = os.path.splitext(os.path.basename(vname))[0] + f"（弹幕版）.{fmt}"
+            if args.output_dir:
+                output_dir = args.output_dir
+            else:
+                output_dir = os.path.dirname(vname)+'（弹幕版）'
+        elif mode == 'transcode':
+            filename = os.path.splitext(os.path.basename(vname))[0] + f"（转码后）.{fmt}"
+            if args.output_dir:
+                output_dir = args.output_dir
+            else:
+                output_dir = os.path.dirname(vname)+'（转码后）'
+        
         os.makedirs(output_dir,exist_ok=True)
         output = join(output_dir,filename)
 
@@ -65,7 +74,7 @@ def main():
                 })
             continue
 
-        if not exists(danmu):
+        if mode == 'dmrender' and not exists(danmu):
             ignores.append({
                 'video': vname,
                 'msg': f'视频 {vname} 不存在匹配的弹幕文件，跳过渲染.',

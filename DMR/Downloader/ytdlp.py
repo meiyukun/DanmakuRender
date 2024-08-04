@@ -78,7 +78,7 @@ class YtdlpDownloader:
             self.ytdl_proc.wait()
             return self.ytdl_proc.returncode == 0
 
-        with tempfile.TemporaryFile('.temp') as tmpfile:
+        with tempfile.TemporaryFile(dir='.temp') as tmpfile:
             self.ytdl_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=tmpfile, stderr=subprocess.STDOUT)
             try:
                 self.ytdl_proc.wait(self.subprocess_timeout)

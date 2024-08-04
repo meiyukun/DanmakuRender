@@ -320,6 +320,49 @@ upload_args:
     no_reprint: 1
     # 是否开启充电? 0-关闭 1-开启
     open_elec: 1
+  # 上传到YouTube（此功能暂不可用）
+  youtube:
+    # 上传引擎，目前只支持youtubev3 (Google API v3 for Youtube)
+    engine: youtubev3
+    # Google账号Oauth2文件路径
+    cookies: ~
+    # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
+    # 注意：此重试会完全重传整个视频，不应该设置太大
+    retry: 0
+    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止，0表示不限制
+    timeout: 0
+    # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
+    # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
+    realtime: False
+    # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
+    min_length: 120
+    # 以下参数来自Google API，部分选项请参考 https://developers.google.com/youtube/v3/docs/videos/insert
+    # 标题，可以使用关键字替换
+    # 默认的例子：[飞天狙想要努力变胖/直播回放] 晚上七点半比赛 2023年2月24日 （带弹幕版）
+    title: '[{STREAMER.NAME}/直播回放] {TITLE} {CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日'
+    # 简介，可以使用关键字替换
+    desc: |
+      {STREAMER.NAME} 的直播回放
+      标题：{TITLE} 
+      时间：{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日
+      直播地址：{STREAMER.URL} 
+
+      ————————————
+      由DanmakuRender录制：
+      https://github.com/SmallPeaches/DanmakuRender
+    # 视频标签
+    # Youtube的视频标签可以为空
+    tag: ~
+    # 延迟发布
+    # 此功能暂不生效
+    dtime: 0
+    # 视频分区编号，默认20（游戏）
+    # 请参考 https://developers.google.com/youtube/v3/docs/videoCategories/list?hl=zh-cn
+    # 或者 https://gist.github.com/dgp/1b24bf2961521bd75d6c
+    category: 20
+    # 完全自定义上传请求（https://developers.google.com/youtube/v3/docs/videos/insert?hl=zh-cn#request-body）
+    # 应设置为json格式字符串，可使用关键字替换
+    raw_upload_body: ~
 
 # 清理器核心参数
 cleaner_kernel_args:
