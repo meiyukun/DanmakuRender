@@ -61,7 +61,7 @@ class YtdlpDownloader:
             extra_args:list=None,
             **kwargs,
         ):
-        cmd = ['yt-dlp', '--ignore-config', '--color', 'never', '--force-overwrites']
+        cmd = ['yt-dlp', '--ignore-config', '--color', 'never', '--force-overwrites', '--no-warnings']
         cmd += ['-o', join(output_dir, output_name)]
         
         if quality: cmd += ['--format', quality]
@@ -78,7 +78,7 @@ class YtdlpDownloader:
             self.ytdl_proc.wait()
             return self.ytdl_proc.returncode == 0
 
-        with tempfile.TemporaryFile() as tmpfile:
+        with tempfile.TemporaryFile('.temp') as tmpfile:
             self.ytdl_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=tmpfile, stderr=subprocess.STDOUT)
             try:
                 self.ytdl_proc.wait(self.subprocess_timeout)
@@ -91,7 +91,13 @@ class YtdlpDownloader:
             info = tmpfile.read().decode('utf8', errors='ignore')
 
             if info_only:
-                info = [json.loads(i) for i in info.split('\n') if i.strip() != '']
+                info = []
+                for i in info.split('\n'):
+                    if not i: continue
+                    try: 
+                        info.append(json.loads(i))
+                    except Exception as e: 
+                        self.logger.error(f'解析视频信息 {i} 时出现错误: {e}')
                 return info
 
             if self.ytdl_proc.returncode != 0 and not self.stoped:
@@ -126,6 +132,8 @@ class YtdlpDownloader:
                 need_download_videos = [i for i in info if i['id'] not in downloaded_today]
 
                 for yt_video in need_download_videos:
+                    self.logger.info(f'开始下载 {yt_video["original_url"]}: {yt_video["title"]} ...')
+                    self.logger.debug(f'Video Info: {yt_video}')
                     status = self.download_once(
                         url=yt_video['original_url'], 
                         output_dir=self.output_dir, 

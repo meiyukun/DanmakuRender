@@ -138,6 +138,8 @@ class YuttoDownloader():
                     
                 for bvid in valid_videos:
                     video_info = vapi.fetch_video_info(bvid)
+                    self.logger.info(f'开始下载 {bvid}: {video_info["title"]} ...')
+                    self.logger.debug(f'Video Info: {video_info}')
                     for pid, pinfo in enumerate(video_info['pages']):
                         segment_info = VideoInfo(
                             file_id=uuid(),
