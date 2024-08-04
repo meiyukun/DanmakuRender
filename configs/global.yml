@@ -22,27 +22,30 @@ download_args:
   # 直播录制
   live:
     # 直播间链接
-    url: ''
-    # 录制输出文件夹，设置为空则使用任务名称作为文件夹
-    output_dir: ./直播回放
-    # 录制文件名称格式，可使用关键字替换，默认效果：飞天狙想要努力变胖-2023年3月1日20点30分，注意这里不能含有冒号，斜杠等非法字符！！
-    output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
-    # 录播分段时间（秒），默认一个小时
-    segment: 3600
+    # 请填写标准格式链接，例如：https://live.bilibili.com/123456
+    url: 
     # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
     # 在使用streamgears作为录制引擎时，录制视频格式可能会根据直播流的不同而不同
     # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
     # 录制twitch等特殊平台建议使用streamlink
+    # streamlink可用平台请参考 https://streamlink.github.io/plugins.html
     engine: ffmpeg
+    # 录制输出文件夹，设置为空则使用主播名称作为文件夹
+    output_dir: ./直播回放
+    # 录制文件名称模板
+    # 可使用关键字替换，默认效果：飞天狙想要努力变胖-2023年3月1日20点30分，注意这里不能含有冒号，斜杠等非法字符！！
+    output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
+    # 录播分段时间（秒），默认一个小时
+    segment: 3600
+    # 录制视频的格式，默认flv
+    output_format: flv
     # 是否录制弹幕
     danmaku: True
     # 是否录制直播流
     video: True
     # 延迟下播计时（分钟）
     # 使用这个功能可以把主播短暂下播又开播认定为同一场直播
-    stop_wait_time: 5
-    # 录制视频的格式，默认flv
-    output_format: flv
+    stop_wait_time: 120
     # 直播流选项
     stream_option:
       # 直播流CDN
@@ -56,11 +59,11 @@ download_args:
       # 如果希望不登录录制最低画质，请设置为'None'
       bili_watch_cookies: .login_info/bili_watch_cookies.json
     # 高级视频录制参数
-    # 请注意此参数随时可能删减，正常情况下不应该修改
+    # 请确保你明白这些参数的含义后再修改
     advanced_video_args: 
       # 默认分辨率，此选项用于在程序无法获取流分辨率时指定默认分辨率用于弹幕录制
       default_resolution: [1920, 1080]
-      # 开播检测间隔，每隔这样一段时间检测一次是否开播
+      # 开播检测间隔，每隔这段时间检测一次是否开播
       start_check_interval: 60
       # 下播检测间隔，在主播下播但是未超过延迟下播时间时使用
       stop_check_interval: 30
@@ -125,9 +128,10 @@ download_args:
       username: ~
     # 弹幕模板（此功能暂不生效）
     dm_template:
-      danmaku: 
+      # ASS文本模板
+      ass_text: '{CONTENT}'
     # 高级弹幕录制参数
-    # 请注意此参数随时可能删减，正常情况下不应该修改
+    # 请确保你明白这些参数的含义后再修改
     advanced_dm_args:
       # 弹幕延迟补偿(秒)，将弹幕强行提前
       dm_delay_fixed: 6
@@ -219,7 +223,7 @@ render_args:
     # 也可以指定为当前视频的大小倍数，例如'1.5'，这样1080P视频将会被放大到2880x1620（这个也符合了B站的4K视频标准）
     output_resize: ~
     # 高级渲染参数
-    # 请注意此参数随时可能删减，正常情况下不应该修改
+    # 请确保你明白这些参数的含义后再修改
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
@@ -246,7 +250,7 @@ render_args:
     # 也可以指定为当前视频的大小倍数，例如'1.5'，这样1080P视频将会被放大到2880x1620（这个也符合了B站的4K视频标准）
     output_resize: 1.5
     # 高级渲染参数
-    # 请注意此参数随时可能删减，正常情况下不应该修改
+    # 请确保你明白这些参数的含义后再修改
     advanced_render_args: ~
   # 自定义ffmpeg调用
   rawffmpeg:
@@ -263,6 +267,7 @@ uploader_kernel_args:
 
 # 上传器默认参数
 upload_args:
+  # 上传到B站
   bilibili:
     # 上传引擎，目前只支持biliuprs
     engine: biliuprs
@@ -272,7 +277,9 @@ upload_args:
     cookies: ~
     # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
     # 注意：重试会整个视频重传，并且阻塞后面视频的上传，不应该设置太大
-    retry: 0
+    retry: 3
+    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止（用于防止biliup卡死），0表示不限制
+    timeout: 0
     # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
     # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
     realtime: True
@@ -316,6 +323,50 @@ upload_args:
     no_reprint: 1
     # 是否开启充电? 0-关闭 1-开启
     open_elec: 1
+  
+  # 上传到YouTube（此功能暂不可用）
+  youtube:
+    # 上传引擎，目前只支持youtubev3 (Google API v3 for Youtube)
+    engine: youtubev3
+    # Google账号Oauth2文件路径
+    cookies: ~
+    # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
+    # 注意：此重试会完全重传整个视频，不应该设置太大
+    retry: 0
+    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止，0表示不限制
+    timeout: 0
+    # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
+    # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
+    realtime: False
+    # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
+    min_length: 120
+    # 以下参数来自Google API，部分选项请参考 https://developers.google.com/youtube/v3/docs/videos/insert
+    # 标题，可以使用关键字替换
+    # 默认的例子：[飞天狙想要努力变胖/直播回放] 晚上七点半比赛 2023年2月24日 （带弹幕版）
+    title: '[{STREAMER.NAME}/直播回放] {TITLE} {CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日'
+    # 简介，可以使用关键字替换
+    desc: |
+      {STREAMER.NAME} 的直播回放
+      标题：{TITLE} 
+      时间：{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日
+      直播地址：{STREAMER.URL} 
+
+      ————————————
+      由DanmakuRender录制：
+      https://github.com/SmallPeaches/DanmakuRender
+    # 视频标签
+    # Youtube的视频标签可以为空
+    tag: ~
+    # 延迟发布
+    # 此功能暂不生效
+    dtime: 0
+    # 视频分区编号，默认20（游戏）
+    # 请参考 https://developers.google.com/youtube/v3/docs/videoCategories/list?hl=zh-cn
+    # 或者 https://gist.github.com/dgp/1b24bf2961521bd75d6c
+    category: 20
+    # 完全自定义上传请求（https://developers.google.com/youtube/v3/docs/videos/insert?hl=zh-cn#request-body）
+    # 应设置为json格式字符串，可使用关键字替换
+    raw_upload_body: ~
 
 # 清理器默认参数
 clean_args:
