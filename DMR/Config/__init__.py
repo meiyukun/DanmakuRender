@@ -89,16 +89,16 @@ class Config():
                     for clean_file_types, clean_args in _replay_config['clean_args'].items():
                         if isinstance(clean_args, dict):
                             clean_args = [clean_args]
-                    replay_config['clean_args'][clean_file_types] = []
-                    for clean_arg in clean_args:
-                        method = clean_arg.get('method')
-                        if not method:
-                            continue
-                        if not global_clean_args.get(method):
-                            raise ValueError(f'不存在可用的清理方法 {method}.')
-                        clean_config = deepcopy(global_clean_args[method])
-                        clean_config.update(clean_arg)
-                        replay_config['clean_args'][clean_file_types].append(clean_config)
+                        replay_config['clean_args'][clean_file_types] = []
+                        for clean_arg in clean_args:
+                            method = clean_arg.get('method')
+                            if not method:
+                                continue
+                            if not global_clean_args.get(method):
+                                raise ValueError(f'不存在可用的清理方法 {method}.')
+                            clean_config = deepcopy(global_clean_args[method])
+                            clean_config.update(clean_arg)
+                            replay_config['clean_args'][clean_file_types].append(clean_config)
 
             self.replay_config[taskname] = deepcopy(replay_config)
 
