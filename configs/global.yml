@@ -130,7 +130,7 @@ download_args:
       max_length: 0
     # 弹幕模板
     dm_template:
-      # ASS文本模板
+      # ASS文本模板，使用方法请参考文档
       ass_text: ~
     # 高级弹幕录制参数
     # 请确保你明白这些参数的含义后再修改
