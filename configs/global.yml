@@ -124,12 +124,14 @@ download_args:
       # 例如：[菜, fw]
       keywords: ~
       # 用户名称过滤，只有用户名称完全与发弹幕的用户名相同才会过滤
-      # 此功能暂不生效
+      # 例如：[虎牙小助手, TwitchBot]
       username: ~
-    # 弹幕模板（此功能暂不生效）
+      # 最长弹幕长度，超过此长度的弹幕将被过滤
+      max_length: 0
+    # 弹幕模板
     dm_template:
       # ASS文本模板
-      ass_text: '{CONTENT}'
+      ass_text: ~
     # 高级弹幕录制参数
     # 请确保你明白这些参数的含义后再修改
     advanced_dm_args:
@@ -141,12 +143,15 @@ download_args:
       # 部分主播可能同时在平台同时开播，可以用这个同时录制多个直播间的弹幕到一个视频
       # 应该设置为一个列表（不包括原来录制的房间），例如：['https://live.bilibili.com/123456', 'https://live.bilibili.com/654321']
       dm_extra_inputs: []
+      # 弹幕文件最小录制时间，小于此录制时间的弹幕文件将被删除
+      # 此功能可用于删除因为录制错误导致的许多空弹幕文件
+      dm_file_min_time: ~
   
   # 视频下载
   videos:
     # 需要下载的视频链接
     # 可以是UP主主页，播放列表，合集等
-    url: ''
+    url: 
     # 录制输出文件夹
     output_dir: ./视频下载
     # 录制文件名称格式
@@ -275,6 +280,10 @@ upload_args:
     account: bilibili
     # 上传cookies路径，如果设置为空将会保存到./login_info/{ACCOUNT}.json
     cookies: ~
+    # 任务级上传锁，此功能保证同一个任务中的上传是串行的从而保证视频顺序，默认True
+    # 如果设置为False，那么除第一个视频外其他所有上传任务将会完全并行
+    # 对非实时上传的任务无效
+    task_upload_lock: True
     # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
     # 注意：重试会整个视频重传，并且阻塞后面视频的上传，不应该设置太大
     retry: 3
@@ -286,8 +295,8 @@ upload_args:
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 120
     # 以下参数来自biliuprs，详细内容可以参考 https://biliup.github.io/biliup-rs/index.html
-    # 上传线路
-    line: bda2
+    # 上传线路，设置为空则由biliuprs自动选择
+    line: ~
     # 上传线程数
     limit: 3
     # 是否为转载视频 1-自制 2-转载
@@ -331,13 +340,11 @@ upload_args:
     # Google账号Oauth2文件路径
     cookies: ~
     # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
-    # 注意：此重试会完全重传整个视频，不应该设置太大
-    retry: 0
-    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止，0表示不限制
+    retry: 3
+    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止（用于防止卡死），0表示不限制
     timeout: 0
-    # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
-    # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
-    realtime: False
+    # 实时上传（边录边传），每录制一个分段上传一次，默认开启
+    realtime: True
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 120
     # 以下参数来自Google API，部分选项请参考 https://developers.google.com/youtube/v3/docs/videos/insert
@@ -367,6 +374,23 @@ upload_args:
     # 完全自定义上传请求（https://developers.google.com/youtube/v3/docs/videos/insert?hl=zh-cn#request-body）
     # 应设置为json格式字符串，可使用关键字替换
     raw_upload_body: ~
+
+  # 完全自定义上传
+  # 调用的上传程序应该在上传成功后返回0，失败返回非0，并将错误信息输出到stderr
+  # 具体说明请参考GitHub文档
+  custom:
+    # 上传引擎，目前只支持子进程调用
+    engine: subprocess
+    # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
+    # 注意：重试会整个视频重传，并且阻塞后面视频的上传，不应该设置太大
+    retry: 3
+    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止（用于防止卡死），0表示不限制
+    timeout: 0
+    # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
+    min_length: 120
+    # 上传命令行参数，可以使用关键字替换
+    # 为保证安全调用，请使用参数列表的形式，例如：['python', 'upload.py', '{PATH}']
+    command: ~
 
 # 清理器默认参数
 clean_args:

@@ -88,11 +88,11 @@ class YtdlpDownloader:
                 return False
 
             tmpfile.seek(0)
-            info = tmpfile.read().decode('utf8', errors='ignore')
+            raw_info = tmpfile.read().decode('utf8', errors='ignore')
 
             if info_only:
                 info = []
-                for i in info.split('\n'):
+                for i in raw_info.split('\n'):
                     if not i: continue
                     try: 
                         info.append(json.loads(i))

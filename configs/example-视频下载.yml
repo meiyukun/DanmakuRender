@@ -81,8 +81,8 @@ upload_args:
     # 上传的视频最短长度（秒）
     min_length: 0
     # 以下参数来自biliuprs，详细内容可以参考 https://biliup.github.io/biliup-rs/index.html
-    # 上传线路
-    line: bda2
+    # 上传线路，设置为空则由biliuprs自动选择
+    line: ~
     # 上传线程数
     limit: 3
     # 是否为转载视频 1-自制 2-转载
