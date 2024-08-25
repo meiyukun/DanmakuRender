@@ -23,6 +23,7 @@ class AssWriter():
                  auto_fontsize:bool,
                  outlinecolor:str,
                  outlinesize:int,
+                 dm_template:dict=None,
                  **kwargs) -> None:
         self.description = description
         self.height = height
@@ -41,6 +42,7 @@ class AssWriter():
         self.opacity = hex(255-int(opacity*255))[2:].zfill(2)
         self.outlinecolor = str(outlinecolor).zfill(6)
         self.outlinesize = outlinesize
+        self.ass_text_template = dm_template.get('ass_text')
         self.kwargs = kwargs
 
         self._lock = threading.Lock()
@@ -125,7 +127,10 @@ class AssWriter():
         dm_info += '{\move(%d,%d,%d,%d)}'%(x0, y + self.dst, x1, y + self.dst)
         dm_info += '{\\alpha&H%s\\1c%s&}'%(self.opacity, RGB2BGR(danmu.color))
         content = danmu.content.replace('\n',' ').replace('\r',' ')
-        dm_info += content
+        if not self.ass_text_template:
+            dm_info += content
+        else:
+            dm_info += replace_keywords(self.ass_text_template, danmu)
 
         with self._lock, open(self._filename, 'a', encoding='utf-8') as f:
             f.write(dm_info + '\n')

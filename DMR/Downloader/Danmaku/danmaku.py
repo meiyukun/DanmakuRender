@@ -35,23 +35,45 @@ class DanmakuDownloader():
         self.dm_delay_fixed = self.advanced_dm_args.get('dm_delay_fixed', 6)
         self.dm_auto_restart = self.advanced_dm_args.get('dm_auto_restart', 300)
         self.dm_extra_inputs = self.advanced_dm_args.get('dm_extra_inputs', [])
-        try:
-            dm_filter = dm_filter['keywords']
-            if not dm_filter:
-                self.dm_filter = []
-            elif isinstance(dm_filter, str):
-                self.dm_filter = [dm_filter]
-            else:
-                self.dm_filter = dm_filter
-            self.dm_filter = [re.compile(str(x)) for x in self.dm_filter]
-        except Exception as e:
-            self.logger.warn(f'弹幕屏蔽词{dm_filter}设置错误:{e}，此功能将不会生效.')
-            self.dm_filter = []
-        self.kwargs = kwargs
+        self.dm_file_min_time = self.advanced_dm_args.get('dm_file_min_time', 10)
 
+        self.dm_filter = {}
+        try:
+            keywords_filter = dm_filter['keywords']
+            if not keywords_filter:
+                keywords_filter = []
+            elif isinstance(keywords_filter, str):
+                keywords_filter = [keywords_filter]
+            elif isinstance(keywords_filter, list):
+                pass
+            else:
+                raise ValueError('dm_filter.keywords must be a list or str.')
+            keywords_filter = [re.compile(str(x)) for x in keywords_filter]
+            self.dm_filter['keywords'] = keywords_filter
+        except Exception as e:
+            self.logger.warn(f'弹幕屏蔽词{keywords_filter}设置错误:{e}，此功能将不会生效.')
+            self.dm_filter['keywords'] = []
+        
+        try:
+            username_filter = dm_filter['username']
+            if not username_filter:
+                username_filter = []
+            elif isinstance(username_filter, str):
+                username_filter = [username_filter]
+            elif isinstance(username_filter, list):
+                pass
+            else:
+                raise ValueError('dm_filter.username must be a list or str.')
+            username_filter = [re.compile(str(x)) for x in username_filter]
+            self.dm_filter['username'] = username_filter
+        except Exception as e:
+            self.logger.warn(f'用户屏蔽{username_filter}设置错误:{e}，此功能将不会生效.')
+            self.dm_filter['username'] = []
+        
+        self.kwargs = kwargs
         self.part = 0
 
-        if platform.system()=='Windows':
+        if platform.system() == 'Windows':
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         
         if dm_format == 'ass':
@@ -95,15 +117,21 @@ class DanmakuDownloader():
             except Exception as e:
                 self.logger.error(f'弹幕 {old_dm_file} 分段失败: {e}.')
 
-    def dm_available(self,dm) -> bool:
-        if not (dm.get('msg_type') == 'danmaku'):
+    def dm_available(self, dm:SimpleDanmaku) -> bool:
+        if dm.time < 0 \
+                or not dm.content \
+                or not dm.uname \
+                or dm.dtype != 'danmaku':
             return False
-        if not dm.get('name'):
-            return False
-        if self.dm_filter:
-            for dmf in self.dm_filter:
-                if dmf.search(dm.get('content','')):
-                    return False
+        
+        for keyword in self.dm_filter['keywords']:
+            if keyword.search(dm.content):
+                return False
+        
+        for username in self.dm_filter['username']:
+            if username.fullmatch(dm.uname):
+                return False
+        
         return True
     
     def start_dmc(self):
@@ -130,15 +158,14 @@ class DanmakuDownloader():
             while not self.stoped:
                 try:
                     dm = q.get_nowait()
-                    dm['time'] = datetime.now().timestamp() - self.part_start_time - self.dm_delay_fixed
-                    if dm['time'] > 0 and self.dm_available(dm):
-                        danmu = SimpleDanmaku(
-                            time=dm['time'],
-                            dtype='danmaku',
-                            uname=dm['name'],
-                            color=dm['color'],
-                            content=dm['content']
-                        )
+                    danmu = SimpleDanmaku(
+                        time=datetime.now().timestamp() - self.part_start_time - self.dm_delay_fixed,
+                        dtype=dm.get('msg_type', 'others'),
+                        uname=dm.get('name', ''),
+                        color=dm.get('color', 'ffffff'),
+                        content=dm.get('content', ''),
+                    )
+                    if self.dm_available(danmu):
                         retry = 0
                         if self.dmwriter.add(danmu):
                             last_dm_time = datetime.now().timestamp()
@@ -183,10 +210,11 @@ class DanmakuDownloader():
     def stop(self):
         self.stoped = True
         self.logger.debug('danmaku writer stoped.')
-        if datetime.now().timestamp() - self.part_start_time < 10: # duration < 10s
+
+        # 删除过短的弹幕文件
+        if datetime.now().timestamp() - self.part_start_time < self.dm_file_min_time:
             try:
                 os.remove(self.dm_file)
             except Exception as e:
                 self.logger.debug(e)
         return True
-
