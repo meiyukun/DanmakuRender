@@ -21,7 +21,7 @@ download_args:
   # 录制文件名称格式，可使用关键字替换，默认效果：飞天狙想要努力变胖-2023年3月1日20点30分，注意这里不能含有冒号，斜杠等非法字符！！
   output_name: '{STREAMER.NAME}-{CTIME.YEAR}年{CTIME.MONTH:02d}月{CTIME.DAY:02d}日{CTIME.HOUR:02d}点{CTIME.MINUTE:02d}分'
   # 录播分段时间（秒），默认一个小时
-  segment: 600
+  segment: 3600
   # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
   # 在使用streamgears作为录制引擎时，录制视频格式可能会根据直播流的不同而不同
   # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制

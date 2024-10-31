@@ -143,9 +143,9 @@ download_args:
       # 部分主播可能同时在平台同时开播，可以用这个同时录制多个直播间的弹幕到一个视频
       # 应该设置为一个列表（不包括原来录制的房间），例如：['https://live.bilibili.com/123456', 'https://live.bilibili.com/654321']
       dm_extra_inputs: []
-      # 弹幕文件最小录制时间，小于此录制时间的弹幕文件将被删除
+      # 弹幕文件最小录制时间（秒），小于此录制时间的弹幕文件将被删除
       # 此功能可用于删除因为录制错误导致的许多空弹幕文件
-      dm_file_min_time: ~
+      dm_file_min_time: 10
   
   # 视频下载
   videos:
