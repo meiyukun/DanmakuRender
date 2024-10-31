@@ -80,7 +80,7 @@ class StreamDownloadTask():
             self.send_queue.put(msg)
 
     def stable_callback(self, time_error):
-        if hasattr(self, 'dmw'):
+        if hasattr(self, 'dmw') and self.dmw:
             self.dmw.time_fix(time_error)
 
     def segment_callback(self, filename:str):
@@ -98,7 +98,7 @@ class StreamDownloadTask():
             dtype='src_video',
             path=filename,
             group_id=self.sess_id,
-            segment_id=0,
+            segment_id=self.segment_id,
             size=os.path.getsize(filename),
             ctime=self.segment_start_time,
             duration=duration,
@@ -127,20 +127,21 @@ class StreamDownloadTask():
         video_info.dm_file_id = newdmfile
         self._pipeSend(event='livesegment', msg=f'视频分段 {newfile} 录制完成.', target=f'replay/{self.taskname}', dtype='VideoInfo', data=video_info)
 
-        new_room_info = self.liveapi.GetRoomInfo()
+        new_room_info = retry_safe(self.liveapi.GetRoomInfo)
         if new_room_info:
             self.room_info = new_room_info
         self.segment_start_time = datetime.now()
+        self.segment_id += 1
 
     def start_once(self):
         self.stoped = False
         
         # init segment info
-        self.room_info = self.streamer_info = None
-        while not self.streamer_info:
-            self.streamer_info = self.liveapi.GetStreamerInfo()
-        while not self.room_info:
-            self.room_info = self.liveapi.GetRoomInfo()
+        self.room_info = retry_safe(self.liveapi.GetRoomInfo)
+        self.streamer_info = retry_safe(self.liveapi.GetStreamerInfo)
+        if not(self.room_info and self.streamer_info):
+            raise RuntimeError(f'获取主播信息出现错误.')
+        
         self.segment_start_time = datetime.now()
         os.makedirs(self.output_dir,exist_ok=True)
         
@@ -216,6 +217,7 @@ class StreamDownloadTask():
         start_check_interval = self.advanced_video_args.get('start_check_interval', 60)  # 开播检测时间
         stop_check_interval = self.advanced_video_args.get('stop_check_interval', 30)   # 下播检测间隔
         self.sess_id = uuid(8)
+        self.segment_id = 1
 
         if not self.liveapi.Onair():
             self._pipeSend('liveend', '直播已结束', )
@@ -236,6 +238,7 @@ class StreamDownloadTask():
                     live_end = True
                     self._pipeSend('liveend', '直播已结束', data=self.sess_id)
                     self.sess_id = uuid(8)          # 每场直播结束后重新分配session id
+                    self.segment_id = 1
                 continue
 
             try:
@@ -274,7 +277,7 @@ class StreamDownloadTask():
 
     def stop_once(self):
         self.stoped = True
-        if self.danmaku and hasattr(self, 'dmw'):
+        if self.danmaku and hasattr(self, 'dmw') and self.dmw:
             try:
                 self.dmw.stop()
             except Exception as e:

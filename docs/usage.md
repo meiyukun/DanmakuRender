@@ -47,7 +47,7 @@
 `{TITLE}` 直播标题/视频标题      
 `{URL}` 直播间链接或者视频链接      
 `{TASKNAME}` 任务名称（配置文件DMR-后面那个）         
-`{SEGMENT_ID}` 视频分段序号，从0开始（仅在录制分P视频时有效）        
+`{SEGMENT_ID}` 视频分段序号，从1开始。录制直播时不能保证数字的连续性，因为录制错误的分段也会占用一个序号        
 `{GROUP_ID}` 视频组ID，在录制B站分P视频时此字段代表视频总标题，TITLE代表各分P标题，其他情况下此ID为随机数       
 `{CTIME.YEAR}, {CTIME.MONTH}, {CTIME.DAY}, {CTIME.HOUR}, {CTIME.MINUTE}, {CTIME.SECOND}` 直播分段时间/视频上传时间，年月日时分秒，YouTube视频只能精确到天（时分秒都会是0）       
 `{STREAMER.NAME}` 主播/UP主名称      
