@@ -147,13 +147,16 @@ class Uploader():
                     status, info = False, e
                     self.logger.exception(e)
                 
-                if status:
+                retry -= 1
+                if status or self.stoped:
+                    break
+                elif retry < 0:
+                    self.logger.warning(f'上传 {[f.path for f in files]} 时出现错误，跳过上传.')
                     break
                 else:
                     self.logger.warning(f'上传 {[f.path for f in files]} 时出现错误，即将重传.')
                     self.logger.debug(info)
                     time.sleep(60)
-                    retry -= 1
             
             if status:
                 self._gather(task, 'info', desc=info)
