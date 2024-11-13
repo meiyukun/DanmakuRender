@@ -6,7 +6,7 @@ import glob
 import tempfile
 import threading
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from os.path import exists, join, splitext, split, isdir, isfile
 from DMR.utils import *
 
@@ -108,16 +108,12 @@ class YtdlpDownloader:
     
     def download_directly(self):
         self.start_time = self.start_time or datetime.now()
-        downloaded_today = []
+        downloaded_video = {}
 
         while not self.stoped:
             try:
-                stime = datetime.now()
-                if datetime.now().day != self.start_time.day:
-                    downloaded_today = []
-                
                 os.makedirs(self.output_dir, exist_ok=True)
-                output_name = self.output_name or '%(title)s.%(ext)s'
+                output_name = self.output_name or '%(title)s [%(id)s].%(ext)s'
                 info = self.download_once(
                     url=self.url, 
                     output_dir=self.output_dir, 
@@ -129,7 +125,7 @@ class YtdlpDownloader:
                     extra_args=self.extra_args,
                 )
                 
-                need_download_videos = [i for i in info if i['id'] not in downloaded_today]
+                need_download_videos = [i for i in info if i['id'] not in downloaded_video]
 
                 for yt_video in need_download_videos:
                     self.logger.info(f'开始下载 {yt_video["original_url"]}: {yt_video["title"]} ...')
@@ -164,15 +160,19 @@ class YtdlpDownloader:
                         tag=yt_video.get('tags', ''),
                     )
                     self.segment_callback(video_info)
-                    downloaded_today.append(yt_video['id'])
+                    downloaded_video[yt_video['id']] = datetime.now()
                 
-                self.start_time = stime
             except Exception as e:
                 self.logger.error(f'下载 {self.url} 时出现错误: {e}')
             
             if self.end_time and datetime.now() > self.end_time:
                 self.stoped = True
                 return 'finished'
+            
+            self.start_time = max(datetime.now() - timedelta(days=2), self.start_time)
+            for video_id, download_time in list(downloaded_video.items()):
+                if datetime.now() - download_time > timedelta(days=7):
+                    downloaded_video.pop(video_id)
 
             time.sleep(self.check_interval)
 
