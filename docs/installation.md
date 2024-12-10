@@ -4,9 +4,10 @@
 **目录：**      
 [Windows安装](#Windows安装)     
 [Linux安装](#Linux安装)         
+[macOS安装](#macOS安装)         
 [备注](#备注)           
 
-更新日期：2023.8.10。     
+更新日期：2024.12.10。     
 
 ## Windows安装 
 
@@ -65,6 +66,43 @@ sudo apt-get install ffmpeg
 在录制斗鱼弹幕时需要JavaScript解释器，部分Linux并没有预装，需要手动安装（这里以nodejs为例）：
 ```shell
 sudo apt install nodejs npm
+```
+
+## macOS安装
+与Linux的安装方法基本类似，示例系统版本为macOS Sequoia 15.1.1。   
+
+1. 安装Python            
+macOS一般已经默认安装Python，使用命令`python -V`检测是否安装Python。如果没有请先安装 [Homebrew](https://brew.sh/) 之后输入以下指令安装：
+```shell
+brew install python@3.9
+```
+
+2. 安装程序     
+安装release版本的方法类似Windows，安装测试版的话可以使用git命令安装：
+```git
+git clone https://github.com/SmallPeaches/DanmakuRender.git -b v5
+```
+
+3. 安装Python包     
+打开 `终端` 应用程序，输入下面的命令安装Python包。    
+```shell
+pip install -r requirements.txt
+```
+
+4. 安装FFmpeg       
+使用Homebrew快速安装：
+```shell
+brew install ffmpeg
+```
+如果需要安装最新版本，请前往：https://ffmpeg.org/download.html      
+
+5. 安装biliup-rs        
+方法类似Linux安装，下载时选择macOS的预编译版本（根据处理器平台选择aarch64或x86_64版本）        
+
+6. 安装JavaScript解释器           
+在录制斗鱼弹幕时需要JavaScript解释器，macOS并没有预装，需要手动安装（这里以nodejs为例）：
+```shell
+brew install node
 ```
 
 ## 备注     
