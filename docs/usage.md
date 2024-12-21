@@ -75,7 +75,7 @@ render_args:
   # 硬件解码参数，默认自动
   # 请注意，使用远程桌面时auto可能出现问题，请设置为空
   hwaccel_args: [-hwaccel,auto] 
-  # 使用NVIDIA H.264编码器，A卡用户设置为h264_amf，I卡设置为h264_qsv，CPU渲染设置为libx264
+  # 使用NVIDIA H.264编码器，A卡用户设置为h264_amf，I卡设置为h264_qsv，Apple用户设置为h264_videotoolbox，CPU渲染设置为libx264
   vencoder: h264_nvenc   
   # 指定编码器参数，默认15M码率         
   vencoder_args: ['-b:v','15M'] 
@@ -509,7 +509,7 @@ render_args:
     format: mp4
     # 硬件解码参数，默认由FFmpeg自动判断，如果出现问题可以设为空
     hwaccel_args: [-hwaccel, auto]
-    # 视频编码器，NVIDIA设置为h264_nvenc，AMD设置为h264_amf，CPU设置为libx264
+    # 视频编码器，NVIDIA设置为h264_nvenc，AMD设置为h264_amf，Apple用户设置为h264_videotoolbox，CPU设置为libx264
     vencoder: h264_nvenc
     # 视频编码器参数，默认恒定码率15Mbps
     vencoder_args: [-b:v, 15M]
@@ -536,7 +536,7 @@ render_args:
     format: mp4
     # 硬件解码参数，默认由FFmpeg自动判断，如果出现问题可以设为空
     hwaccel_args: [-hwaccel, auto]
-    # 视频编码器，NVIDIA设置为h264_nvenc，AMD设置为h264_amf，CPU设置为libx264
+    # 视频编码器，NVIDIA设置为h264_nvenc，AMD设置为h264_amf，Apple用户设置为h264_videotoolbox，CPU设置为libx264
     vencoder: h264_nvenc
     # 视频编码器参数，默认恒定码率15Mbps
     vencoder_args: [-b:v, 15M]
