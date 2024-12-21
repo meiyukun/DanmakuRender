@@ -33,7 +33,7 @@ download_args:
     # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
     # 录制twitch等特殊平台建议使用streamlink
     # streamlink可用平台请参考 https://streamlink.github.io/plugins.html
-    engine: ffmpeg
+    engine: streamgears
     # 录制输出文件夹，设置为空则使用主播名称作为文件夹
     output_dir: ./直播回放
     # 录制文件名称模板
@@ -128,12 +128,14 @@ download_args:
       # 例如：[菜, fw]
       keywords: ~
       # 用户名称过滤，只有用户名称完全与发弹幕的用户名相同才会过滤
-      # 此功能暂不生效
+      # 例如：[虎牙小助手, TwitchBot]
       username: ~
-    # 弹幕模板（此功能暂不生效）
+      # 最长弹幕长度，超过此长度的弹幕将被过滤
+      max_length: 0
+    # 弹幕模板
     dm_template:
-      # ASS文本模板
-      ass_text: '{CONTENT}'
+      # ASS文本模板，使用方法请参考文档
+      ass_text: ~
     # 高级弹幕录制参数
     # 请确保你明白这些参数的含义后再修改
     advanced_dm_args:
@@ -145,9 +147,9 @@ download_args:
       # 部分主播可能同时在平台同时开播，可以用这个同时录制多个直播间的弹幕到一个视频
       # 应该设置为一个列表（不包括原来录制的房间），例如：['https://live.bilibili.com/123456', 'https://live.bilibili.com/654321']
       dm_extra_inputs: []
-      # 弹幕文件最小录制时间，小于此录制时间的弹幕文件将被删除
+      # 弹幕文件最小录制时间（秒），小于此录制时间的弹幕文件将被删除
       # 此功能可用于删除因为录制错误导致的许多空弹幕文件
-      dm_file_min_time: 30
+      dm_file_min_time: 10
   
   # 视频下载
   videos:
@@ -335,20 +337,34 @@ upload_args:
     # 是否开启充电? 0-关闭 1-开启
     open_elec: 1
   
-  # 上传到YouTube（此功能暂不可用）
+  # 上传到YouTube
+  # 此功能使用较复杂，细节请参考文档
   youtube:
     # 上传引擎，目前只支持youtubev3 (Google API v3 for Youtube)
     engine: youtubev3
-    # Google账号Oauth2文件路径
-    cookies: ~
+    # 应用程序密钥路径
+    client_secrets: .login_info/client.json
+    # Google账号名称
+    # 也可以直接指向已授权的Oauth2文件路径
+    account: .login_info/google-oauth2.json
+    # Google账号验证选项
+    # 例如：在服务器上无GUI验证时，应设置为['--noauth_local_webserver']
+    credential_args: ~
     # 重试次数，如果上传遇到错误将会重试，设置为0表示不重试
-    # 注意：此重试会完全重传整个视频，不应该设置太大
-    retry: 3
-    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止，0表示不限制
+    # 特别提示：此重试会完全重传视频并消耗API配额（除非由于配额不够失败），需要断点续传请设置下面的参数
+    retry: 0
+    # 断点续传次数，此次数为单次上传中断点续传的次数，设置为0表示无限续传，直到上传完成或者API返回错误
+    # 强烈建议设置无限续传，否则完全重传需要消耗API配额，并且未上传成功的视频需要自己到YouTube页面删除
+    retry_resume: 0
+    # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止（用于防止卡死），0表示不限制
     timeout: 0
-    # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
-    # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
+    # 实时上传（边录边传），每录制一个分段上传一次，youtube默认关闭
     realtime: False
+    # 是否合并视频（此功能暂不生效）
+    # 如果设置为True，那么会把所有分段视频合并成一个视频再上传，默认True
+    # 使用实时上传时此功能不生效
+    # 强烈建议关闭实时上传，并启动合并视频再上传，因为YouTube API默认每天只能上传6个视频
+    concat_video: True
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 120
     # 以下参数来自Google API，部分选项请参考 https://developers.google.com/youtube/v3/docs/videos/insert
@@ -365,16 +381,18 @@ upload_args:
       ————————————
       由DanmakuRender录制：
       https://github.com/SmallPeaches/DanmakuRender
-    # 视频标签
+    # 视频标签，多个标签逗号分割，例如：'直播回放,ABC'
     # Youtube的视频标签可以为空
     tag: ~
-    # 延迟发布
-    # 此功能暂不生效
-    dtime: 0
     # 视频分区编号，默认20（游戏）
     # 请参考 https://developers.google.com/youtube/v3/docs/videoCategories/list?hl=zh-cn
     # 或者 https://gist.github.com/dgp/1b24bf2961521bd75d6c
     category: 20
+    # 延迟发布（秒）（此功能暂不可用）
+    # 延迟时间从上传启动时开始计算，使用延迟上传时privacy固定为private
+    dtime: 0
+    # 隐私设置，可选：public（公开）, unlisted（未列出）, private（私有），默认public
+    privacy: public
     # 完全自定义上传请求（https://developers.google.com/youtube/v3/docs/videos/insert?hl=zh-cn#request-body）
     # 应设置为json格式字符串，可使用关键字替换
     raw_upload_body: ~

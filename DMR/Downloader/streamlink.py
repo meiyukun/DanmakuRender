@@ -68,7 +68,7 @@ class StreamlinkDownloader():
             ffmpeg_args += [raw_name]
         self.logger.debug(f'{self.taskname} ffmpeg args: {ffmpeg_args}')
 
-        with tempfile.TemporaryFile() as logfile:
+        with tempfile.TemporaryFile(dir='.temp') as logfile:
         # with open('.temp/test.log', 'wb') as logfile:
             self.streamlink_proc = subprocess.Popen(streamlink_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT)
             # 等待streamlink流开始
