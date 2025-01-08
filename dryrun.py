@@ -69,11 +69,10 @@ if __name__ == '__main__':
         dmr.engine.pipeSend(msg)
     
     # logging.info('录制完成，请检查录制文件')
-    while 1:
-        time.sleep(60)
-
-
-
-
-    
-            
+    try:
+        while 1:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        dmr.stop()
+        exit(0)
+           

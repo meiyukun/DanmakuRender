@@ -22,7 +22,11 @@ def main():
     parser.add_argument('--mode', default='dmrender')
     parser.add_argument('--input_dir',type=str)
     parser.add_argument('--output_dir',type=str)
+    parser.add_argument('--transcode', action='store_true')
     args = parser.parse_args()
+
+    if args.transcode:
+        args.mode = 'transcode'
 
     config = Config(args.global_config, args.config)
     
