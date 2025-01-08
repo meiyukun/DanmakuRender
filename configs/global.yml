@@ -67,6 +67,8 @@ download_args:
       start_check_interval: 60
       # 下播检测间隔，在主播下播但是未超过延迟下播时间时使用
       stop_check_interval: 30
+      # 录制组编号，可用于多任务协同，详情请参考文档
+      group_id: ~
       # ffmpeg取流参数(仅ffmpeg下载引擎生效)
       ffmpeg_stream_args: [ '-rw_timeout','10000000',
                             '-analyzeduration','15000000',
@@ -356,10 +358,11 @@ upload_args:
     timeout: 0
     # 实时上传（边录边传），每录制一个分段上传一次，youtube默认关闭
     realtime: False
-    # 是否合并视频（此功能暂不生效）
+    # 是否合并视频
     # 如果设置为True，那么会把所有分段视频合并成一个视频再上传，默认True
     # 使用实时上传时此功能不生效
     # 强烈建议关闭实时上传，并启动合并视频再上传，因为YouTube API默认每天只能上传6个视频
+    # 使用此功能请确保延迟下播时间设置较短，否则不同分辨率的视频合并会导致上传失败
     concat_video: True
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 120
