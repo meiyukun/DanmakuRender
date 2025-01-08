@@ -1,9 +1,7 @@
-import json
 import logging
 import random
 import subprocess
-import sys
-import os
+import re
 import glob
 
 from datetime import datetime
@@ -11,7 +9,6 @@ from os.path import splitext, split, join, exists
 import tempfile
 import time
 
-import requests
 from DMR.utils import *
 from DMR.LiveAPI import Onair
 
@@ -69,11 +66,24 @@ class StreamlinkDownloader():
         self.logger.debug(f'{self.taskname} ffmpeg args: {ffmpeg_args}')
 
         with tempfile.TemporaryFile(dir='.temp') as logfile:
-        # with open('.temp/test.log', 'wb') as logfile:
             self.streamlink_proc = subprocess.Popen(streamlink_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT)
             # 等待streamlink流开始
-            time.sleep(5)
-                
+            streamlink_ok = False
+            for _ in range(60):
+                try:
+                    logfile.seek(0)
+                    stdout = logfile.read().decode('utf8', errors='ignore')
+                    if re.findall(r'http://\d+\.\d+\.\d+\.\d+:'+str(port), stdout):
+                        streamlink_ok = True
+                        break
+                except Exception as e:
+                    pass
+                time.sleep(1)
+            if not streamlink_ok:
+                logfile.seek(0)
+                log = logfile.read().decode('utf8', errors='ignore')
+                raise RuntimeError(f'{self.taskname} Streamlink启动失败: {log}')
+            
             self.ffmpeg_proc = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT)
             self.lastfile = None
             while not self.stoped:
