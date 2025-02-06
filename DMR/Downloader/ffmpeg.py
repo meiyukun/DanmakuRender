@@ -181,20 +181,15 @@ class FFmpegDownloader():
             if self.start_time is not None and self.duration > self._timer_cnt*15:
                 if len(log) == 0:
                     raise RuntimeError(f'{self.taskname} 管道读取错误, 即将重试.')
-                
+
                 ok = False
-                output_log = False
                 for li in log.split('\n'):
                     if li and is_info_line(li):
                         ok = True
-                    if li and not is_info_line(li):
-                        output_log = True
-                
-                if output_log:
-                    self.logger.debug(f'{self.taskname} FFmpeg output:\n{log}')
-                
+                        break
+
                 if not ok:
-                    raise RuntimeError(f'{self.taskname} 直播流读取错误, 即将重试.')
+                    raise RuntimeError(f'{self.taskname} 直播流读取错误, 即将重试: {log}')
 
                 log = ''
                 self._timer_cnt += 1

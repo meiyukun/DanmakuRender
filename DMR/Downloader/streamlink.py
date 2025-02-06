@@ -88,6 +88,7 @@ class StreamlinkDownloader():
             self.lastfile = None
             while not self.stoped:
                 if self.streamlink_proc.poll() is not None or self.ffmpeg_proc.poll() is not None:
+                    self.logger.debug(f'{self.taskname} Streamlink return {self.streamlink_proc.returncode}, ffmpeg return {self.ffmpeg_proc.returncode}')
                     break
 
                 files = sorted(glob.glob(join(self.output_dir, f'*{self.uuid}*')))
@@ -105,7 +106,7 @@ class StreamlinkDownloader():
             if not self.stoped and Onair(self.url):
                 logfile.seek(0)
                 log = logfile.read().decode('utf8', errors='ignore')
-                raise RuntimeError(f'{self.taskname} Streamlink 异常退出 {log}.')
+                raise RuntimeError(f'{self.taskname} Streamlink 异常退出 {log[-1000:]}.')
 
     def start(self):
         # 生成一个uuid，用于标记这次录制的文件

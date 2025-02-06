@@ -128,7 +128,7 @@ class StreamDownloadTask():
         if self.advanced_video_args.get('group_id'):
             group_id = str(self.advanced_video_args['group_id'])
             group_id = replace_keywords(group_id, video_info)
-            video_info.group_id = group_id
+            video_info.upload_group_id = group_id
         self._pipeSend(event='livesegment', msg=f'视频分段 {newfile} 录制完成.', target=f'replay/{self.taskname}', dtype='VideoInfo', data=video_info)
 
         new_room_info = retry_safe(self.liveapi.GetRoomInfo)

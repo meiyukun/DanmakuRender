@@ -168,6 +168,7 @@ class LiveEvents(BaseEvents):
                             if info['file'].duration < arg.get('min_length', 0):
                                 self.logger.info(f'视频{info["file"].path}时长为{info["file"].duration}s，设置{arg.get("min_length", 0)}s，跳过上传.')
                                 continue
+                            upload_group_id = info['file'].upload_group_id if hasattr(info['file'], 'upload_group_id') else group_id
                             upload_msg = PipeMessage(
                                 source=self.name,
                                 target='uploader',
@@ -178,7 +179,7 @@ class LiveEvents(BaseEvents):
                                     'files': [info['file']],
                                     'engine': arg['engine'],
                                     'stateless': False,
-                                    'upload_group': group_id+'_'+upload_file_types+'_'+str(upid),
+                                    'upload_group': upload_group_id+'_'+upload_file_types+'_'+str(upid),
                                     'args': arg,
                                 }
                             )
@@ -210,6 +211,7 @@ class LiveEvents(BaseEvents):
                             if arg.get('realtime'):
                                 continue
                             up_videos = [video for video in videos if video.duration >= arg.get('min_length', 0)]
+                            upload_group_id = up_videos[0].upload_group_id if hasattr(up_videos[0], 'upload_group_id') else group_id
                             upload_msg = PipeMessage(
                                 source=self.name,
                                 target='uploader',
@@ -220,7 +222,7 @@ class LiveEvents(BaseEvents):
                                     'files': up_videos,
                                     'engine': arg['engine'],
                                     'stateless': True,
-                                    'upload_group': group_id+'_'+upload_file_types+'_'+str(upid),
+                                    'upload_group': upload_group_id+'_'+upload_file_types+'_'+str(upid),
                                     'args': arg,
                                 }
                             )

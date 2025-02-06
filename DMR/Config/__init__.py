@@ -45,7 +45,7 @@ class Config():
         for config_path in self.replay_config_path:
             with open(config_path, 'r', encoding='utf-8') as f:
                 _replay_config = yaml.safe_load(f)
-            taskname = os.path.splitext(os.path.basename(config_path))[0].split('-')[-1]
+            taskname = os.path.splitext(os.path.basename(config_path))[0].split('-', 1)[-1]
             replay_config = {}
             # self.replay_config[taskname] = replay_config
             common_args = _replay_config.get('common_event_args')

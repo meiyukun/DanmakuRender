@@ -23,7 +23,7 @@ download_args:
   # 录播分段时间（秒），默认一个小时
   segment: 3600
   # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
-  # 在使用streamgears作为录制引擎时，录制视频格式可能会根据直播流的不同而不同
+  # 在使用streamgears作为录制引擎时不支持录制B站hls流
   # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
   # 录制twitch等特殊平台建议使用streamlink
   engine: streamgears
@@ -71,7 +71,7 @@ download_args:
     # 用户名称过滤，只有用户名称完全与发弹幕的用户名相同才会过滤
     # 例如：[虎牙小助手, TwitchBot]
     username: ~
-    # 最长弹幕长度，超过此长度的弹幕将被过滤
+    # 最长弹幕长度，超过此长度的弹幕将被过滤，0表示不限制
     max_length: 0
 
 # 上传参数，如果不需要上传就把下面的都删了
