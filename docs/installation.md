@@ -7,7 +7,7 @@
 [macOS安装](#macOS安装)         
 [备注](#备注)           
 
-更新日期：2024.12.10。     
+更新日期：2025.02.16。     
 
 ## Windows安装 
 
@@ -43,11 +43,11 @@ sudo apt install python3.9
 2. 安装程序     
 安装release版本的方法类似Windows，安装测试版的话可以使用git命令安装：
 ```git
-git clone https://github.com/SmallPeaches/DanmakuRender.git -b v5
+git clone https://github.com/SmallPeaches/DanmakuRender.git
 ```
 
 3. 安装Python包     
-打开命令行窗口（win10系统shift+右键点击页面空白处，在菜单中选择“在此处打开powershell窗口”，win11在页面右键选择“在终端中打开”），输入下面的命令安装Python包。    
+打开命令行窗口，输入下面的命令安装Python包。    
 ```shell
 pip install -r requirements.txt
 ```
@@ -60,12 +60,16 @@ sudo apt-get install ffmpeg
 如果需要安装最新版本，请前往：https://ffmpeg.org/download.html      
 
 5. 安装biliup-rs        
-方法类似Windows安装，下载时选择Linux的预编译版本        
+方法类似Windows安装，下载时选择Linux的预编译版本（xxx-linux.tar.xz），将其解压得到名为`biliup`的文件，并放入`tools`文件夹中。        
 
 6. 安装JavaScript解释器           
-在录制斗鱼弹幕时需要JavaScript解释器，部分Linux并没有预装，需要手动安装（这里以nodejs为例）：
+在录制斗鱼和抖音弹幕时需要JavaScript解释器，部分Linux并没有预装，需要手动安装（这里以nodejs为例）：
 ```shell
 sudo apt install nodejs npm
+```
+Linux平台下录制抖音直播时可能出现无法找到js引擎的问题(#349)，可以通过安装quickjs包解决：
+```shell
+pip install quickjs
 ```
 
 ## macOS安装
@@ -80,7 +84,7 @@ brew install python@3.9
 2. 安装程序     
 安装release版本的方法类似Windows，安装测试版的话可以使用git命令安装：
 ```git
-git clone https://github.com/SmallPeaches/DanmakuRender.git -b v5
+git clone https://github.com/SmallPeaches/DanmakuRender.git
 ```
 
 3. 安装Python包     

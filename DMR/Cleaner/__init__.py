@@ -78,10 +78,11 @@ class Cleaner():
             method = task['method']
             clean_args = task['args']
             dst = clean_args.get('dest')
+            cleaned_files = []
             for file in task['files']:
                 file:FileInfo
                 if not exists(file.path):
-                    self.logger.warn(f'文件 {file.path} 不存在，跳过清理.')
+                    self.logger.warning(f'文件 {file.path} 不存在，跳过清理.')
                     continue
 
                 self.logger.info(f'正在清理文件: {method} {file.path}.')
@@ -97,6 +98,7 @@ class Cleaner():
                 if dm_file and exists(dm_file):
                     self.logger.info(f'正在清理弹幕文件: {method} {dm_file}.')
                     files.append(dm_file)
+                cleaned_files.extend(files)
                 
                 for f in files:
                     if method == 'move':
@@ -116,7 +118,7 @@ class Cleaner():
                         if wait and p.returncode != 0:
                             raise RuntimeError(f'命令执行失败: {cmds}')
                 
-            self._pipeSend('end', f'清理完成：{method} {files} -> {dst}.', target=task['source'], request_id=task['request_id'])
+            self._pipeSend('end', f'清理完成：{method} {cleaned_files} -> {dst}.', target=task['source'], request_id=task['request_id'])
         except Exception as e:
             self.logger.exception(e)
             self._pipeSend('error', f'清理错误 {e}.', target=task['source'], request_id=task['request_id'], dtype='Exception', data=e)
