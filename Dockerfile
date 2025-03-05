@@ -4,7 +4,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN apk add --no-cache nodejs ffmpeg && \
-    pip install -r requirements.txt
+RUN apk add --no-cache nodejs ffmpeg 
+RUN pip3 install --upgrade pip
+RUN pip install -r requirements.txt
 
 ENTRYPOINT ["python3", "-u", "main.py"]
