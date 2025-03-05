@@ -3,7 +3,7 @@ FROM python:3.9-alpine
 WORKDIR /app
 
 COPY . .
-RUN apk add --no-cache curl
+RUN apk update && apk add --no-cache curl
 RUN apt-get update && apt-get install -y build-essential
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
