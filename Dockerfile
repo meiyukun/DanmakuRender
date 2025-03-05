@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . .
 RUN apk update && apk add --no-cache curl
-RUN apt-get update && apt-get install -y build-essential
+RUN apk add --no-cache build-essential
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN apk add --no-cache nodejs ffmpeg 
