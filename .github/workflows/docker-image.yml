@@ -28,4 +28,4 @@ jobs:
         with:
           context: .  # Docker 构建上下文
           push: true  # 推送镜像到仓库
-          tags: ${{ secrets.DOCKER_REGISTRY_URL }}/cyansfog/docker/danmakurender:latest  # 镜像标签，使用 commit SHA 作为版本号
+          tags: ${{ secrets.DOCKER_REGISTRY_URL }}/cyansfog/docker:latest  # 镜像标签，使用 commit SHA 作为版本号
