@@ -1,5 +1,5 @@
 # 使用基于 Ubuntu 的 Python 3.9 镜像
-FROM python:3.9-ubuntu
+FROM python:3.9
 
 # 设置工作目录
 WORKDIR /app
@@ -9,7 +9,7 @@ COPY . .
 
 # 更新包列表并安装必要的依赖
 RUN apt-get update && \
-    apt-get install -y nodejs ffmpeg npm && \
+    apt-get install -y python nodejs ffmpeg npm && \
     # 安装 Python 依赖
     pip install -r requirements.txt && pip install quickjs \
     # 删除不必要的依赖
