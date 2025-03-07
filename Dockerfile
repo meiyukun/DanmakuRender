@@ -17,7 +17,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # 声明卷
-VOLUME ["/app/config"]
+VOLUME ["/app/configs"]
 
 # 设置容器启动时执行的命令
 CMD ["python3", "-u", "main.py"]
