@@ -13,8 +13,8 @@ RUN apt-get update && \
     apt-get install -y nodejs ffmpeg intel-media-va-driver npm && \
     pip install -r requirements.txt && pip install quickjs && \
     wget -O biliup-rs.tar.xz https://github.com/biliup/biliup-rs/releases/download/${BILIUP_VERSION}/biliupR-${BILIUP_VERSION}-x86_64-linux.tar.xz && \
-    tar -xf biliup-rs.tar.xz -C . && mv ./biliupR-${BILIUP_VERSION}-x86_64-linux/biliup ./tools/ && rm ./biliup-rs.tar.xz && rm -rf ./biliupR-${BILIUP_VERSION}-x86_64-linux/ && \
-   # apt-get autoremove && apt-get clean && \
+    tar -xf biliup-rs.tar.xz -C . && mv ./biliupR-${BILIUP_VERSION}-x86_64-linux/biliup ./tools/ && rm ./biliup-rs.tar.xz && rm -rf ./biliupR-${BILIUP_VERSION}-x86_64-linux/ \
+   # && apt-get autoremove && apt-get clean && \
    # rm -rf /var/lib/apt/lists/*
 
 # 声明卷
