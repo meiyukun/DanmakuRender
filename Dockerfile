@@ -11,7 +11,7 @@ COPY . .
 RUN apt-get update && \
     apt-get install -y nodejs ffmpeg npm && \
     pip install -r requirements.txt && pip install quickjs && \
-    apt-get clean && \
+    apt-get autoremove && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # 声明卷
