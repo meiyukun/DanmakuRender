@@ -1,5 +1,5 @@
 # 使用基于 Ubuntu 的 Python 3.9 镜像
-FROM python:3.9
+FROM ubuntu/python:3.10-22.04_stable
 
 # 设置工作目录
 WORKDIR /app
