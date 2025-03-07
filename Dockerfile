@@ -13,7 +13,7 @@ RUN apt-get update && \
     # 安装 Python 依赖
     pip install -r requirements.txt && pip install quickjs \
     # 清理 apt 缓存
-    apt-get autoremove -y && \
+    apt-get autoremove  && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
