@@ -14,6 +14,7 @@ RUN apt-get update && \
     pip install -r requirements.txt && pip install quickjs && \
     wget -O biliup-rs.tar.xz https://github.com/biliup/biliup-rs/releases/download/${BILIUP_VERSION}/biliupR-${BILIUP_VERSION}-x86_64-linux.tar.xz && \
     tar -xf biliup-rs.tar.xz -C . && mv ./biliupR-${BILIUP_VERSION}-x86_64-linux/biliup ./tools/ && rm ./biliup-rs.tar.xz && rm -rf ./biliupR-${BILIUP_VERSION}-x86_64-linux/ \
+    wget -O /usr/share/fonts/yahei.ttf https://github.com/chengda/popular-fonts/raw/refs/heads/master/%E5%BE%AE%E8%BD%AF%E9%9B%85%E9%BB%91.ttf && fc-cache -f
    # && apt-get autoremove && apt-get clean && \
    # rm -rf /var/lib/apt/lists/*
 
