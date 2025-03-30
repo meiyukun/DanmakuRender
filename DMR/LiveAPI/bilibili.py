@@ -119,7 +119,7 @@ class bilibili(BaseAPI):
         # 当设置为best时，尽可能找到URL里面不带bluray字样的原画流
         # 这些流的区别从quality里面看不出来
         if quality == 'best':
-            best_urls = [best_urls for best_urls in avail_urls if not re.search(r'live_\d+_[a-zA-Z_]{0,10}\d+_[a-zA-Z]{0,10}', best_urls['stream_url'])]
+            best_urls = [best_urls for best_urls in avail_urls if not re.search(r'live_\d+_[a-zA-Z_]{0,10}\d+_[a-zA-Z]{1,10}', best_urls['stream_url'])]
             if best_urls:
                 avail_urls = best_urls
 
