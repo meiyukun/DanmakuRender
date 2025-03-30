@@ -44,7 +44,7 @@ class DmRender(BaseRender):
             else:
                 w, h = FFprobe.get_resolution(video)
                 if not (h and w):
-                    self.logger.warn(f'获取视频 {video} 分辨率失败, 将使用默认分辨率 1920x1080.')
+                    self.logger.warning(f'获取视频 {video} 分辨率失败, 将使用默认分辨率 1920x1080.')
                     w, h = 1920, 1080
                 scale = float(self.output_resize)
                 w, h = int(w*scale), int(h*scale)
@@ -65,7 +65,8 @@ class DmRender(BaseRender):
             filter_str = 'subtitles=filename=\'%s\'' % danmaku
         
         ffmpeg_args += [
-            '-fflags', '+discardcorrupt',
+            '-fflags', '+discardcorrupt+genpts',
+            '-analyzeduration', '2147483647', '-probesize', '2147483647',
             '-i', video,
             filter_name, filter_str,
 
@@ -88,7 +89,7 @@ class DmRender(BaseRender):
 
         valid_output = safe_filename(output)
         if valid_output != output:
-            self.logger.warn(f'输出文件名 {output} 不合法或已存在，已更改为 {valid_output}.')
+            self.logger.warning(f'输出文件名 {output} 不合法或已存在，已更改为 {valid_output}.')
             output = valid_output   
 
         start_time = datetime.now()
