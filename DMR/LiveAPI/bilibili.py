@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import requests
 import json
 import random
@@ -58,7 +59,7 @@ class bilibili(BaseAPI):
                 watch_cookies = {c['name']: c['value'] for c in cookies['cookie_info']['cookies']}
                 logger.info(f'正在使用 {bili_watch_cookies} 的cookies登录B站.')
             except Exception as e:
-                logger.warn(f'B站观看cookies设置错误:{e}，即将使用无登录模式.')
+                logger.warning(f'B站观看cookies设置错误:{e}，即将使用无登录模式.')
 
         res = self._get_response()
         room_id = res['data']['room_id']
@@ -68,7 +69,7 @@ class bilibili(BaseAPI):
             'platform': 'html5',
             'protocol': '0,1',
             'format': '0,1,2',
-            'codec': '0',
+            'codec': '0,1,2',   # 0:flv, 1:hevc, 2:av1
             'qn': 20000,
             'ptype': 8,
             'dolby': 5,
@@ -81,61 +82,90 @@ class bilibili(BaseAPI):
             for protocol_info in stream:
                 for format_info in protocol_info['format']:
                     format_name = format_info['format_name']
-                    http_info = format_info['codec'][0]
-                    base_url = http_info['base_url']
-                    for info in http_info['url_info']:
-                        host = info['host']
-                        extra = info['extra']
-                        url = host + base_url + extra
-                        real_urls.append({
-                            'quality': http_info['current_qn'],
-                            'stream_cdn': host.split('//')[1],
-                            'stream_type': format_name,
-                            'stream_url': url,
-                        })
+                    for http_info in format_info['codec']:
+                        base_url = http_info['base_url']
+                        codec_name = http_info['codec_name']
+                        for info in http_info['url_info']:
+                            host = info['host']
+                            extra = info['extra']
+                            url = host + base_url + extra
+                            real_urls.append({
+                                'quality': http_info['current_qn'],
+                                'stream_cdn': host.split('//')[1],
+                                'stream_type': f'{format_name}-{codec_name}',
+                                'stream_url': url,
+                            })
         except Exception as e:
-            raise RuntimeError(f'bilibili直播流获取错误: {e}')
+            raise RuntimeError(f'bilibili {self.rid} 直播流获取错误: {e}')
         
-        if http_info['current_qn'] != max(http_info['accept_qn']):
-            logger.warn('未登录B站账号，无法录制原画，将录制最低画质直播（480P）.')
+        if max(real_urls, key=lambda x: x['quality'])['quality'] < 10000:
+            logger.warning('未登录B站账号，无法录制原画，将录制最低画质直播.')
         
         return real_urls
     
     def get_stream_url(self,
                        stream_cdn=None, 
                        stream_type=None,
+                       quality=None,
                        **kwargs) -> str:
         stream_type = stream_type or 'flv'
+        quality = quality or 'best'
         avail_urls = self.get_stream_urls(**kwargs)
+
+        # 有可能返回的流存在多种质量，因为H.265和H.264压缩策略不同
+        max_quality = max(avail_urls, key=lambda x: x['quality'])['quality']
+        avail_urls = [max_res_urls for max_res_urls in avail_urls if max_res_urls['quality'] == max_quality]
+
+        # 当设置为best时，尽可能找到URL里面不带bluray字样的原画流
+        # 这些流的区别从quality里面看不出来
+        if quality == 'best':
+            best_urls = [best_urls for best_urls in avail_urls if not re.search(r'live_\d+_[a-zA-Z_]{0,10}\d+_[a-zA-Z]{1,10}', best_urls['stream_url'])]
+            if best_urls:
+                avail_urls = best_urls
+
         selected_urls = []
         for url_info in avail_urls:
-            if stream_cdn and url_info['stream_cdn'] != stream_cdn:
+            if stream_cdn \
+                and url_info['stream_cdn'] != stream_cdn \
+                and re.search(stream_cdn, url_info['stream_cdn']) is None:
                 continue
-            if stream_type and url_info['stream_type'] != stream_type:
+            if stream_type and stream_type not in url_info['stream_type']:
                 continue
             uri = url_info['stream_url']
             selected_urls.append(uri)
         
         if not selected_urls:
-            logger.warn(f'Bilibili{self.rid}没有满足 {stream_cdn},{stream_type} 的流，将使用默认选项.')
+            logger.warning(f'Bilibili{self.rid}没有满足 {stream_cdn},{stream_type} 的流，将使用默认选项.')
             return random.choice(avail_urls)['stream_url']
         else:
             return random.choice(selected_urls)
 
     def get_info(self) -> tuple:
-        resp = self.sess.get(f'https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom?room_id={self.rid}', headers=self.header, timeout=5).json()
-        data = resp['data']
+        try:
+            resp = self.sess.get(f'https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom?room_id={self.rid}', headers=self.header, timeout=5).json()
+            data = resp['data']
+            
+            title = data['room_info']['title']
+            uname = data['anchor_info']['base_info']['uname']
+            face_url = data['anchor_info']['base_info']['face']
+            cover_url = data['room_info']['cover']
         
-        title = data['room_info']['title']
-        uname = data['anchor_info']['base_info']['uname']
-        face_url = data['anchor_info']['base_info']['face']
-        keyframe_url = data['room_info']['keyframe']
+        # 海外服务器可能报错就用下面的方法
+        except Exception as e:
+            resp = self.sess.get(f'https://api.live.bilibili.com/room/v1/Room/get_info?room_id={self.rid}', headers=self.header, timeout=5).json()
+            title = resp['data']['title']
+            cover_url = resp['data']['user_cover']
 
-        return title, uname, face_url, keyframe_url
+            resp = self.sess.get(f'https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid={self.rid}', headers=self.header, timeout=5).json()
+            info = resp['data']['info']
+            uname = info['uname']
+            face_url = info['face']
+
+        return title, uname, face_url, cover_url
     
     def get_stream_header(self) -> dict:
         return self.header
 
 if __name__ == '__main__':
-    api = bilibili('9607937')    
-    print(api.get_stream_urls()) 
+    api = bilibili('25803826')    
+    print(api.get_stream_url()) 
