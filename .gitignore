@@ -3,7 +3,7 @@
 /logs/
 /venv/
 /test**
-
+/live/
 replay-**.yml
 DMR-**.yml
 **.exe
