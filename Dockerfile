@@ -32,11 +32,11 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1
 
 
 # 更新包列表并安装DMR必要的依赖
-RUN apt-get fontconfig nodejs npm
+RUN apt-get install -y fontconfig nodejs npm
 RUN pip install -r requirements.txt && pip install quickjs 
 RUN wget -O biliup-rs.tar.xz https://github.com/biliup/biliup-rs/releases/download/${BILIUP_VERSION}/biliupR-${BILIUP_VERSION}-x86_64-linux.tar.xz && \
     tar -xf biliup-rs.tar.xz -C . && mv ./biliupR-${BILIUP_VERSION}-x86_64-linux/biliup ./tools/ && rm ./biliup-rs.tar.xz && rm -rf ./biliupR-${BILIUP_VERSION}-x86_64-linux/ && \
-    mv ./msyh.ttc /usr/share/fonts fc-cache -f
+    mv ./fonts/* /usr/share/fonts && fc-cache -f
 #    wget -O /usr/share/fonts/yahei.ttf https://github.com/chengda/popular-fonts/raw/refs/heads/master/%E5%BE%AE%E8%BD%AF%E9%9B%85%E9%BB%91.ttf && fc-cache -f \
 
 RUN apt-get autoremove && apt-get clean && \
