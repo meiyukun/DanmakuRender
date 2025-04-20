@@ -6,9 +6,8 @@ import time
 import threading
 import platform
 from datetime import datetime
-from os.path import *
 
-from DMR.Downloader.Danmaku.asshandle import replace_emoji_in_text
+from DMR.Downloader.Danmaku.AssHandle.ass_handle import ass_handle_default
 from DMR.LiveAPI.danmaku import DanmakuClient
 from DMR.utils import SimpleDanmaku
 
@@ -113,6 +112,8 @@ class DanmakuDownloader():
             self.logger.debug(f'New DMfile: {new_dm_file}')
             self.dmwriter.open(new_dm_file)
             self.dm_file = new_dm_file
+
+        ass_handle_default(old_dm_file)
         if filename:
             try:
                 os.rename(old_dm_file, filename)
@@ -169,7 +170,6 @@ class DanmakuDownloader():
                     )
                     if self.dm_available(danmu):
                         retry = 0
-                        danmu.content = replace_emoji_in_text(danmu.content)
                         if self.dmwriter.add(danmu):
                             last_dm_time = datetime.now().timestamp()
                     continue
