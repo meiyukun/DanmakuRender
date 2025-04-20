@@ -92,7 +92,7 @@ class DmRender(BaseRender):
             self.logger.warning(f'输出文件名 {output} 不合法或已存在，已更改为 {valid_output}.')
             output = valid_output   
 
-        start_time = datetime.now()
+        start_time = video.ctime
         status, info = self.render_helper(video.path, danmaku, output, **kwargs)
         if status:
             output_info:VideoInfo = copy.deepcopy(video)
