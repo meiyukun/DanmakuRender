@@ -28,7 +28,7 @@ def add_text_in_pic(image_path, output_path, title: str, desc: str, bottom_text:
 
     # 加载字体（使用比例字体大小）
     try:
-        bold_font_path = "fonts/msyhbd.ttc"
+        bold_font_path = "fonts/cover1.ttf"
         fixed_font = ImageFont.truetype(bold_font_path, int(img_height * title_font_ratio))
         middle_font = ImageFont.truetype(bold_font_path, int(img_height * desc_font_ratio))
         time_font = ImageFont.truetype(bold_font_path, int(img_height * time_font_ratio))
@@ -100,7 +100,7 @@ def create_cover(video_path, output_pic_path, title: str, desc: str, bottom_text
 
 if __name__ == "__main__":
     video_path = r"C:\Users\53459\Videos\直播录制\羊羊不吃草（第五人格）-2025年03月06日12点01分.flv"
-    output_path = r"../../../.temp/output.jpg"
+    output_path = r".temp/output.jpg"
 
     create_cover(video_path, output_path,
                  title="S1前锋单排录像",
