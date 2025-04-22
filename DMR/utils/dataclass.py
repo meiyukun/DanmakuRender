@@ -81,6 +81,8 @@ class FileInfo(cpdict):
         self.path = path
         self.size = size
         self.ctime = ctime
+        from DMR.utils.utils import judge_time_period
+        self.rtime = judge_time_period(ctime)
         super().__init__(
                 file_id=file_id,
                 dtype=dtype,

@@ -188,3 +188,15 @@ def uuid(len:int=None):
     if len is None: 
         return struuid
     return struuid[:len]
+
+def judge_time_period(ctime):
+    if ctime.hour < 6:
+        return '凌晨'
+    elif 6 <= ctime.hour < 10:
+        return '早上'
+    elif 10 <= ctime.hour < 14:
+        return '中午'
+    elif 14 <= ctime.hour < 18:
+        return '下午'
+    else:
+        return '晚上'
