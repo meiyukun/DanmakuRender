@@ -8,24 +8,25 @@ import tempfile
 import time
 import subprocess
 
+from DMR.Uploader.cover.cover_main import fix_cover
 from DMR.utils import replace_keywords, ToolsList, VideoInfo
 
 
 class biliuprs():
 
-    def __init__(self, 
-                 cookies:str=None, 
-                 account:str=None, 
+    def __init__(self,
+                 cookies:str=None,
+                 account:str=None,
                  task_upload_lock:bool=True,
-                 debug=False, 
-                 biliup:str=None, 
+                 debug=False,
+                 biliup:str=None,
                  **kwargs,
     ) -> None:
         self.biliup = biliup if biliup else ToolsList.get('biliup')
 
         if not (cookies or account):
             raise ValueError('cookies or account must be set.')
-        
+
         if cookies is None:
             self.account = account
             self.cookies = f'.login_info/{account}.json'
@@ -50,8 +51,8 @@ class biliuprs():
     def __del__(self):
         self.stop()
 
-    def call_biliuprs(self, 
-        video, 
+    def call_biliuprs(self,
+        video,
         bvid:str=None,
         copyright:int=1,
         cover:str='',
@@ -104,7 +105,7 @@ class biliuprs():
 
         upload_args = [str(x) for x in upload_args]
         self.logger.debug(f'biliuprs: {upload_args}')
-        
+
         if not logfile:
             logfile = sys.stdout
 
@@ -112,10 +113,10 @@ class biliuprs():
             upload_proc = subprocess.Popen(upload_args, stdin=subprocess.PIPE, stdout=sys.stdout, stderr=subprocess.STDOUT, bufsize=10**8)
         else:
             upload_proc = subprocess.Popen(upload_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT, bufsize=10**8)
-        
+
         try:
             self._upload_procs[upload_proc.pid] = upload_proc
-            if timeout: 
+            if timeout:
                 upload_proc.wait(timeout=timeout)
             else:
                 upload_proc.wait()
@@ -124,9 +125,9 @@ class biliuprs():
         finally:
             upload_proc.kill()
             self._upload_procs.pop(upload_proc.pid)
-        
+
         return logfile
-    
+
     def islogin(self):
         renew_args = self.base_args + ['renew']
         proc = subprocess.Popen(renew_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=10**8)
@@ -145,7 +146,7 @@ class biliuprs():
             print(f'正在登录名称为 {self.account} 的账户:')
             proc = subprocess.Popen(login_args)
             proc.wait()
-        
+
         print(f'将 {self.account} 的登录信息保存到 {self.cookies}.')
 
     def upload_once(self, video, bvid=None, **config):
@@ -153,7 +154,7 @@ class biliuprs():
             self.call_biliuprs(video=video, bvid=bvid, logfile=logfile, **config)
             if self.debug:
                 return True, ''
-        
+
             out_bvid = None
             log = ''
             logfile.seek(0)
@@ -163,12 +164,12 @@ class biliuprs():
                 if '\"bvid\"' in line:
                     res = re.search(r'(BV[0-9A-Za-z]{10})', line)
                     if res:  out_bvid = res[0]
-        
+
         if out_bvid:
             return True, out_bvid
         else:
             return False, log
-    
+
     def format_config(self, config, video_info=None, replace_invalid=False):
         config = config.copy()
 
@@ -204,6 +205,8 @@ class biliuprs():
                 except Exception as e:
                     logging.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
                     config['cover'] = ''
+        if config.get('cover_auto'):
+            fix_cover(config,video_info)
         return config
 
     def upload(self, files:list[VideoInfo], **kwargs):
@@ -213,7 +216,7 @@ class biliuprs():
 
         if self._upload_lock.locked():
             self.logger.warning('上传速度慢于录制速度，可能导致上传队列阻塞！')
-        
+
         video_files = [f.path for f in files]
         status, bvid = False, ''
 

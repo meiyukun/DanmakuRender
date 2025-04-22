@@ -13,3 +13,5 @@ yutto
 easydict
 streamlink
 m3u8
+moviepy
+pillow
