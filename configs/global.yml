@@ -24,12 +24,13 @@ download_args:
     # 直播间链接
     # 请填写标准格式链接，例如：https://live.bilibili.com/123456
     url: 
-    # 录制程序引擎，可选ffmpeg, streamgears 或者 streamlink
+    # 录制程序引擎，可选ffmpeg, streamgears, pyrequests 或者 streamlink
     # 在使用streamgears作为录制引擎时不支持录制B站hls流
     # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
     # 录制twitch等特殊平台建议使用streamlink
     # streamlink可用平台请参考 https://streamlink.github.io/plugins.html
-    engine: ffmpeg
+    # 默认为auto，由程序自动选择
+    engine: auto
     # 录制输出文件夹，设置为空则使用主播名称作为文件夹
     output_dir: ./live/raw
     # 录制文件名称模板
@@ -47,28 +48,44 @@ download_args:
     # 使用这个功能可以把主播短暂下播又开播认定为同一场直播
     stop_wait_time: 120
     # 直播流选项
+    # 使用streamlink录制时不生效
     stream_option:
       # 直播流CDN
-      # 对于虎牙直播，此项可选al, tx, hw等cdn服务器的缩写，默认tx
-      # 对于B站，可选特定的CDN域名前缀，例如 c1--cn-gotcha208
+      # 对于虎牙直播，此项可选al, tx, hw等cdn服务器的缩写
+      # 对于B站，可选特定的CDN域名前缀，例如：c1--cn-gotcha208
+      # 或者正则匹配特定CDN，例如：.*cn-gotcha.*
+      # 默认为空，由程序随机选择可用cdn
       stream_cdn: ~
-      # 直播流类型，可选flv, hls，默认flv
-      # 暂时只对B站生效（部分情况下B站的flv流是不可用的，只能用hls）
-      stream_type: flv
+      # 直播流类型（暂时只对B站生效）可选flv，hls，avc，hevc，av1
+      # 注意hls流无法使用streamgears录制
+      # 如果需要同时指定codec类型，请使用'type-codec'的格式，例如：flv-avc
+      # 默认为空，由程序自动选择
+      stream_type: ~
       # B站观看cookies，用于获取直播流，如果不填写则使用登录B站上传视频的cookies
       # 如果希望不登录录制最低画质，请设置为'None'
       bili_watch_cookies: .login_info/bili_watch_cookies.json
     # 高级视频录制参数
     # 请确保你明白这些参数的含义后再修改
-    advanced_video_args:
+    advanced_video_args: 
       # 默认分辨率，此选项用于在程序无法获取流分辨率时指定默认分辨率用于弹幕录制
       default_resolution: [1920, 1080]
       # 开播检测间隔，每隔这段时间检测一次是否开播
       start_check_interval: 60
       # 下播检测间隔，在主播下播但是未超过延迟下播时间时使用
-      stop_check_interval: 30
+      stop_check_interval: 60
+      # 视频文件名称最长长度，超过此长度的文件名称将会被裁剪，默认80（B站视频名称最大长度）
+      # 最大设置为256，否则文件无法被创建
+      max_fn_length: 80
+      # 视频文件最小大小（MB），小于此大小的视频文件将会被删除，默认1MB
+      # 此功能可用于删除因为录制错误导致的许多空视频文件
+      min_video_size: 1
+      # 视频文件最小录制时间（秒），小于此录制时间的视频文件将被删除，默认不启用
+      # 和最小大小配合使用时，只要有一个满足就会被删除
+      min_video_duration: ~
       # 录制组编号，可用于多任务协同，详情请参考文档
       group_id: ~
+      # 使用B站强制原画功能，仅适用于pyrequests引擎下的hls流
+      bili_force_origin: True
       # ffmpeg取流参数(仅ffmpeg下载引擎生效)
       ffmpeg_stream_args: [ '-rw_timeout','10000000',
                             '-analyzeduration','15000000',
@@ -80,8 +97,6 @@ download_args:
       disable_lowspeed_interrupt: false
       # streamlink 额外输入参数
       # 可用参数列表请参考 https://streamlink.github.io/cli.html
-      # 一个典型的使用方法是添加一个--twitch-api-header参数，用于取消twitch直播流的广告
-      # 特别提醒，使用此方法传入参数会在日志文件中明文显示，如果需要共享日志文件请确保删除了敏感信息！
       streamlink_extra_args: [
         "--twitch-disable-ads",     # 去广告，去掉、跳过嵌入的广告流
         "--twitch-disable-reruns",  # 如果该频道正在重放回放，不打开流
@@ -89,7 +104,7 @@ download_args:
 
     # 以下是弹幕录制参数
     # 弹幕录制格式，只能选择ass
-    dm_format: ass
+    dm_format: ass 
     # 弹幕上下间距（行距），设置为0-1的表示为视频宽度的倍数，设置为大于1的数表示像素，默认6
     margin_h: 6
     # 弹幕左右间距，设置为-1表示允许弹幕叠加，设置为0-1的表示间距为视频宽度的倍数，设置为大于1的数表示像素，默认0.05
@@ -147,13 +162,12 @@ download_args:
       dm_extra_inputs: []
       # 弹幕文件最小录制时间（秒），小于此录制时间的弹幕文件将被删除
       # 此功能可用于删除因为录制错误导致的许多空弹幕文件
-      dm_file_min_time: 10
-
+      dm_file_min_time: 30
   # 视频下载
   videos:
     # 需要下载的视频链接
     # 可以是UP主主页，播放列表，合集等
-    url:
+    url: 
     # 录制输出文件夹
     output_dir: ./视频下载
     # 录制文件名称格式
@@ -337,7 +351,7 @@ upload_args:
     no_reprint: 1
     # 是否开启充电? 0-关闭 1-开启
     open_elec: 1
-
+  
   # 上传到YouTube
   # 此功能使用较复杂，细节请参考文档
   youtube:
@@ -439,7 +453,7 @@ clean_args:
     w_srcpre: True
   # 删除文件
   delete:
-    dela: 672800
+    delay: 172800
     w_srcfile: False
     w_srcpre: True
   # 自定义命令
@@ -454,3 +468,6 @@ clean_args:
     delay: 0
     w_srcfile: False
     w_srcpre: True
+
+webservice_kernel_args:
+  web_api: True

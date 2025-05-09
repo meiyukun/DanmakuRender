@@ -30,8 +30,19 @@ __all__ = [
     'random_user_agent',
     'retry_safe',
     'get_tempfile',
+    'merge_dict',
 ]
 
+
+def merge_dict(dict1:dict, dict2:dict) -> dict:
+    """合并两个字典，dict2的值覆盖dict1的值"""
+    merged = dict1.copy()
+    for key, value in dict2.items():
+        if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
+            merged[key] = merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 def get_tempfile(expire:int=86400, prefix:str=None, suffix:str=None) -> str:
     if not suffix:
@@ -166,7 +177,33 @@ def replace_keywords(string:str, kw_info:dict=None, replace_invalid:bool=False):
     return result
 
 def replace_invalid_chars(string:str) -> str:
-    return re.sub(r"[\\/:;.*?\"<>|]", "", str(string))
+    filename = string
+    """修复不合法的文件名,来自yutto"""
+
+    def to_full_width_chr(matchobj: re.Match[str]) -> str:
+        char = matchobj.group(0)
+        full_width_char = chr(ord(char) + ord("？") - ord("?"))
+        return full_width_char
+
+    # 路径非法字符，转全角
+    regex_path = re.compile(r'[\\/:*?"<>|]')
+    # 空格类字符，转空格
+    regex_spaces = re.compile(r"\s+")
+    # 不可打印字符，移除
+    regex_non_printable = re.compile(
+        r"[\001\002\003\004\005\006\007\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+        r"\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a]"
+    )
+    # 尾部多个 .，转为省略号
+    regex_dots = re.compile(r"\.+$")
+
+    filename = regex_path.sub(to_full_width_chr, filename)
+    filename = regex_spaces.sub(" ", filename)
+    filename = regex_non_printable.sub("", filename)
+    filename = filename.strip()
+    filename = regex_dots.sub("……", filename)
+
+    return filename
 
 def sec2hms(sec:float):
     sec = float(sec)
