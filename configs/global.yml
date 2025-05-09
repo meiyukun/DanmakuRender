@@ -115,7 +115,7 @@ download_args:
     # 指定弹幕字体，默认为微软雅黑字体(Microsoft YaHei)
     font: Microsoft YaHei
     # 指定弹幕字体大小，默认为36
-    fontsize: 42
+    fontsize: 50
     # Distance from Screen Top 弹幕距离屏幕顶端的距离（像素，例如20，表示距离屏幕顶端20px）
     dst: 20
     # 指定单条弹幕持续时间（秒），默认为16
@@ -155,7 +155,7 @@ download_args:
       # 弹幕延迟补偿(秒)，将弹幕强行提前
       dm_delay_fixed: 6
       # 弹幕超时自动重启（秒），超过一段时间无弹幕会自动重启弹幕录制，0表示关闭
-      dm_auto_restart: 300
+      dm_auto_restart: 60
       # 额外弹幕流输入
       # 部分主播可能同时在平台同时开播，可以用这个同时录制多个直播间的弹幕到一个视频
       # 应该设置为一个列表（不包括原来录制的房间），例如：['https://live.bilibili.com/123456', 'https://live.bilibili.com/654321']
@@ -233,7 +233,7 @@ render_args:
     # 硬件解码参数，默认由FFmpeg自动判断，如果出现问题可以设为空
     hwaccel_args: [-hwaccel, auto]
     # 视频编码器，NVIDIA设置为h264_nvenc，AMD设置为h264_amf，Apple用户设置为h264_videotoolbox，CPU设置为libx264
-    vencoder: libx264
+    vencoder: h264_qsv
     # 视频编码器参数，默认恒定码率15Mbps想·
     # vencoder_args: [-b:v, 15M]
     # 基于恒定质量因子（CRF）CRF（Constant Rate Factor）是一种常见的动态码率编码方法，它能在保证视频质量相对稳定的前提下，
@@ -254,7 +254,7 @@ render_args:
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
-      filter_complex: subtitles=filename='{DANMAKU}'
+      filter_complex: fps=fps=60,subtitles=filename='{DANMAKU}'
   # 原视频转码
   transcode:
     # 渲染输出文件夹，默认为在录制输出文件夹后面加上“转码后”
@@ -315,7 +315,7 @@ upload_args:
     # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
     realtime: True
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
-    min_length: 120
+    min_length: 10
     # 以下参数来自biliuprs，详细内容可以参考 https://biliup.github.io/biliup-rs/index.html
     # 上传线路，设置为空则由biliuprs自动选择
     line: ~
