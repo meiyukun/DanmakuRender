@@ -6,7 +6,8 @@ import datetime
 def extract_cover_moviepy(video_path, output_path):
     try:
         clip = VideoFileClip(video_path)
-        clip.save_frame(output_path, t=10)
+
+        clip.save_frame(output_path, t=clip.duration / 2)
         clip.close()
     except Exception as e:
         print(f"提取封面帧失败: {e}")
@@ -33,16 +34,19 @@ def add_text_in_pic(image_path, output_path, title: str, desc: str, bottom_text:
 
     # 动态计算垂直边距（按图像高度比例）
     top_margin_ratio = 0.14  # 顶部边距5%
-    bottom_margin_ratio = 0.15  # 底部边距5%
+    bottom_margin_ratio = 0.17  # 底部边距5%
 
     # 最小左右边距比例
     min_side_margin_ratio = 0.12
     min_side_margin = int(img_width * min_side_margin_ratio)
 
     # 自适应各文本字体大小
-    title_font = get_adaptive_font(draw, title, img_width - 2 * min_side_margin, int(img_height * 0.17), 10)
-    desc_font = get_adaptive_font(draw, desc, img_width - 2 * min_side_margin, int(img_height * 0.13), 10)
-    bottom_font = get_adaptive_font(draw, bottom_text, img_width - 2 * min_side_margin, int(img_height * 0.12), 10)
+    title_font = get_adaptive_font(draw, title, img_width - 2 * min_side_margin, int(img_height * 0.17),
+                                   int(img_height * 0.17) / 1.4)
+    desc_font = get_adaptive_font(draw, desc, img_width - 2 * min_side_margin, int(img_height * 0.13),
+                                  int(img_height * 0.13) / 1.5)
+    bottom_font = get_adaptive_font(draw, bottom_text, img_width - 2 * min_side_margin, int(img_height * 0.12),
+                                    int(img_height * 0.12) / 1.5)
 
     # 计算各文本位置（水平居中，垂直按比例）
     def calculate_text_position(text, font, y_base=None, margin_ratio=0):
@@ -111,6 +115,6 @@ if __name__ == "__main__":
     output_path = r".temp/output.jpg"
 
     create_cover(video_path, output_path,
-                 title="S1前锋单排直播回放",
+                 title="S1前锋单排直播回放dddddddddddddddddddddd",
                  desc="弹幕版！！！",
                  bottom_text=datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M"))
