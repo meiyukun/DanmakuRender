@@ -54,3 +54,41 @@ def filter_ass_danmaku(input_file, output_file, max_repeats=200, interval=300):
 
     with open(output_file, 'w', encoding='utf-8') as f:
         f.writelines(filtered_lines)
+
+
+def filter_ass_at(input_path, output_path):
+    with open(input_path, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    filtered_lines = []
+    in_events_section = False
+    # 匹配@符号后跟任意非空白字符，直到遇到空格、换行或行尾
+    at_pattern = re.compile(r'@\S+(?=[\s\n]|$)')
+
+    for line in lines:
+        if line.strip() == '[Events]':
+            in_events_section = True
+            filtered_lines.append(line)
+            continue
+        elif line.startswith('['):
+            in_events_section = False
+            filtered_lines.append(line)
+            continue
+
+        if in_events_section:
+            # 只处理[Events]部分的内容
+            cleaned_line = at_pattern.sub('', line)
+            filtered_lines.append(cleaned_line)
+        else:
+            # 非Events部分保持原样
+            filtered_lines.append(line)
+
+    with open(output_path, 'w', encoding='utf-8') as file:
+        file.writelines(filtered_lines)
+
+
+if __name__ == "__main__":
+    input_file = r"D:\Programs\Python\DanmakuRender\live\Test\莽夫(有点儿智商但不多)-2025年05月09日16点18分下午.ass"
+    output_file = r"D:\Programs\Python\DanmakuRender\live\Test\莽夫(有点儿智商但不多)-2025年05月09日16点18分下午ddddddd.ass"
+    filter_ass_at(input_file, output_file)
+    print(f"过滤完成，已保存到 {output_file}")
