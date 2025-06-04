@@ -19,8 +19,8 @@ from google.protobuf import json_format
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from DMR.LiveAPI.douyin import douyin_utils
-from DMR.utils import split_url, cookiestr2dict
-from .dy_pb2 import PushFrame, Response, ChatMessage
+from DMR.utils import split_url, cookiestr2dict, SimpleDanmaku, GiftDanmaku, EntryDanmaku
+from .dy_pb2 import PushFrame, Response, ChatMessage, GiftMessage, MemberMessage
 from .utils import DouyinDanmakuUtils
 
 import aiohttp
@@ -152,17 +152,55 @@ class Douyin:
         
         msgs = []
         for msg in payload_package.messagesList:
-            now = datetime.now()
+            now = datetime.now().timestamp()
             if msg.method == 'WebcastChatMessage':
                 chatMessage = ChatMessage()
                 chatMessage.ParseFromString(msg.payload)
                 data = json_format.MessageToDict(chatMessage, preserving_proto_field_name=True)
                 name = data['user']['nickName']
                 content = data['content']
-                msg_dict = {"time": now, "name": name, "content": content, "msg_type": "danmaku", "color": "ffffff"}
+                msg_dict = SimpleDanmaku(
+                    timestamp=now,
+                    uname=name,
+                    content=content,
+                    dtype='danmaku',
+                    color='ffffff'
+                )
+                # msg_dict = {"timestamp": now, "name": name, "content": content, "msg_type": "danmaku", "color": "ffffff"}
                 # print(msg_dict)
+            elif msg.method == 'WebcastMemberMessage':
+                memberMessage = MemberMessage()
+                memberMessage.ParseFromString(msg.payload)
+                data = json_format.MessageToDict(memberMessage, preserving_proto_field_name=True)
+                name = data['user']['nickName']
+                msg_dict = EntryDanmaku(
+                    timestamp=now,
+                    uname=name,
+                    content=f"{name}来了",
+                    dtype='entry',
+                    color='ffffff'
+                )
+            elif msg.method == 'WebcastGiftMessage':
+                giftMessage = GiftMessage()
+                giftMessage.ParseFromString(msg.payload)
+                data = json_format.MessageToDict(giftMessage, preserving_proto_field_name=True)
+                if 'combo' in data['gift'] and not 'repeatEnd' in data:
+                  continue
+                name = data['user']['nickName']
+                diamondCount=str(data['gift']['diamondCount'])
+                msg_dict = GiftDanmaku(
+                    timestamp=now,
+                    uname=name,
+                    content=f"{name}送给主播{data['repeatCount']}个{data['gift']['name']}每个价值抖币{diamondCount}",
+                    gift_name=data['gift']['name'],
+                    gift_count=data['repeatCount'],
+                    gift_price=diamondCount,
+                    price_unit='抖币',
+                    dtype='gift',
+                    color='ffffff'
+                )
             else:
-                msg_dict = {"time": now, "name": "", "content": "", "msg_type": "other", "raw_data": msg}
+                msg_dict = {"timestamp": now, "name": "", "content": "", "msg_type": "other", "raw_data": msg}
             msgs.append(msg_dict)
         
         return msgs, ack

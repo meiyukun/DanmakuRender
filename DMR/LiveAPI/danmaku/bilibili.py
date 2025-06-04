@@ -3,16 +3,19 @@ import json, re, select, random, traceback
 import asyncio, aiohttp, zlib, brotli
 from struct import pack, unpack
 
+from DMR.utils import random_user_agent, SuperChatDanmaku, SimpleDanmaku
+from DMR.LiveAPI.bilivideo_utils import encode_wbi, getWbiKeys
 from .DMAPI import DMAPI
 
 class Bilibili(DMAPI):
     heartbeat = b"\x00\x00\x00\x1f\x00\x10\x00\x01\x00\x00\x00\x02\x00\x00\x00\x01\x5b\x6f\x62\x6a\x65\x63\x74\x20\x4f\x62\x6a\x65\x63\x74\x5d"
     headers = {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate',
-        'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36',
-        'Referer': 'https://live.bilibili.com/',
+        'accept': '*/*',
+        'accept-encoding': 'gzip, deflate',
+        'accept-language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
+        'user-agent': random_user_agent(),
+        'origin': 'https://live.bilibili.com',
+        'referer': 'https://live.bilibili.com'
     }
     interval = 30
 
@@ -24,8 +27,14 @@ class Bilibili(DMAPI):
                 room_json = await resp.json()
                 room_id = room_json["data"]["room_id"]
 
+        encoded_parms = encode_wbi(
+            params = {
+                "id": room_id,
+            },
+            wbi_img=getWbiKeys(),
+        )
         async with aiohttp.ClientSession(headers=Bilibili.headers) as session:
-            async with session.get(f'https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?id={room_id}') as resp:
+            async with session.get('https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo', params=encoded_parms) as resp:
                 room_json = await resp.json()
                 token = room_json['data']['token']
             
@@ -94,7 +103,7 @@ class Bilibili(DMAPI):
                         'DANMU_MSG': 'danmaku',
                         'WELCOME': 'enter',
                         'NOTICE_MSG': 'broadcast',
-                        # 'LIVE_INTERACTIVE_GAME': 'interactive_danmaku'  # 互动弹幕，与普通弹幕重复，已被弃用(#121)
+                        'SUPER_CHAT_MESSAGE': 'super_chat',  # 新增此行
                     }.get(j.get('cmd'), 'other')
 
                     if 'DANMU_MSG' in j.get('cmd'):
@@ -107,7 +116,7 @@ class Bilibili(DMAPI):
                         msg["color"] = f"{j.get('info', [[0, 0, 0, 16777215]])[0][3]:06x}"
                         msg["content"] = j.get("info")[1]
                         try:
-                            msg['time'] = datetime.fromtimestamp(j.get('info')[0][4]/1000)
+                            msg['timestamp'] = j.get('info')[0][4]/1000
                             if j.get('info')[13] != r'{}':
                                 emoticon_info = j.get('info')[0][13]
                                 emoticon_url = emoticon_info['url']
@@ -129,6 +138,16 @@ class Bilibili(DMAPI):
                         msg["content"] = j.get("msg_common", "none")
                         msg["raw"] = j
 
+                    elif msg["msg_type"] == "super_chat":  # 新增此部分
+                        msg["name"] = j.get('data', {}).get('uinfo', {}).get('base', {}).get('name', '')
+                        msg["content"] = j.get('data', {}).get('message', '')
+                        msg["price"] = j.get('data', {}).get('price', 0)
+                        msg["color"] = j.get('data', {}).get('background_color', 'ffffff')
+                        try:
+                            msg['timestamp'] = j.get('data', {}).get('ts')
+                        except:
+                            msg['timestamp'] = datetime.now().timestamp()  # 如果没有时间戳，则使用当前时间
+                        msg = SuperChatDanmaku(**msg)  # 转换为 SuperChatDanmaku 对象
                     else:
                         msg["content"] = j
                 else:
