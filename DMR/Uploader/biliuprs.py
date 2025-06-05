@@ -14,19 +14,19 @@ from DMR.utils import replace_keywords, ToolsList, VideoInfo
 
 class biliuprs():
 
-    def __init__(self, 
-                 cookies:str=None, 
-                 account:str=None, 
+    def __init__(self,
+                 cookies:str=None,
+                 account:str=None,
                  task_upload_lock:bool=True,
-                 debug=False, 
-                 biliup:str=None, 
+                 debug=False,
+                 biliup:str=None,
                  **kwargs,
     ) -> None:
         self.biliup = biliup if biliup else ToolsList.get('biliup')
 
         if not (cookies or account):
             raise ValueError('cookies or account must be set.')
-        
+
         if cookies is None:
             self.account = account
             self.cookies = f'.login_info/{account}.json'
@@ -51,8 +51,8 @@ class biliuprs():
     def __del__(self):
         self.stop()
 
-    def call_biliuprs(self, 
-        video, 
+    def call_biliuprs(self,
+        video,
         bvid:str=None,
         copyright:int=1,
         cover:str='',
@@ -104,7 +104,7 @@ class biliuprs():
 
         upload_args = [str(x) for x in upload_args]
         self.logger.debug(f'biliuprs: {upload_args}')
-        
+
         if not logfile:
             logfile = sys.stdout
 
@@ -112,10 +112,10 @@ class biliuprs():
             upload_proc = subprocess.Popen(upload_args, stdin=subprocess.PIPE, stdout=sys.stdout, stderr=subprocess.STDOUT, bufsize=10**8)
         else:
             upload_proc = subprocess.Popen(upload_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT, bufsize=10**8)
-        
+
         try:
             self._upload_procs[upload_proc.pid] = upload_proc
-            if timeout: 
+            if timeout:
                 upload_proc.wait(timeout=timeout)
             else:
                 upload_proc.wait()
@@ -124,9 +124,9 @@ class biliuprs():
         finally:
             upload_proc.kill()
             self._upload_procs.pop(upload_proc.pid)
-        
+
         return logfile
-    
+
     def islogin(self):
         renew_args = self.base_args + ['renew']
         proc = subprocess.Popen(renew_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=10**8)
@@ -156,7 +156,7 @@ class biliuprs():
             self.call_biliuprs(video=video, bvid=bvid, logfile=logfile, **config)
             if self.debug:
                 return True, ''
-        
+
             out_bvid = None
             log = ''
             logfile.seek(0)
@@ -166,14 +166,30 @@ class biliuprs():
                 if '\"bvid\"' in line:
                     res = re.search(r'(BV[0-9A-Za-z]{10})', line)
                     if res:  out_bvid = res[0]
-        
+
+        if self.task_info.get('bvid') is None and out_bvid:
+            # 首次上传，检查是否要添加到合集
+            section_id = config['section_id']
+            if section_id:
+                from DMR.Uploader.biliapi.bili_section import add_video_to_bilibili_section
+                if config['section_title']:
+                    title = replace_keywords(config['section_title'],video)
+                else:
+                    title = config['title']
+                add_video_to_bilibili_section(bvid=out_bvid, title=title, section_id=section_id, )
+
+
+
         if out_bvid:
             return True, out_bvid
         else:
             return False, log
-    
+
     def format_config(self, config, video_info=None, replace_invalid=False):
         config = config.copy()
+        for k, v in config.items():
+            if type(v) == str:
+                config[k] = replace_keywords(v,video_info,replace_invalid = replace_invalid)
 
         if config.get('title'):
             config['title'] = replace_keywords(config['title'], video_info, replace_invalid=replace_invalid)
@@ -218,7 +234,7 @@ class biliuprs():
 
         if self._upload_lock.locked():
             self.logger.warning('上传速度慢于录制速度，可能导致上传队列阻塞！')
-        
+
         video_files = [f.path for f in files]
         status, bvid = False, ''
 
