@@ -176,8 +176,8 @@ class biliuprs():
                     title = replace_keywords(config['section_title'],video)
                 else:
                     title = config['title']
-                add_video_to_bilibili_section(bvid=out_bvid, title=title, section_id=section_id, )
-
+                ret = add_video_to_bilibili_section(bvid=out_bvid, title=title, section_id=section_id, )
+                self.logger.info("加入合集:%s:%s",section_id,ret)
 
 
         if out_bvid:

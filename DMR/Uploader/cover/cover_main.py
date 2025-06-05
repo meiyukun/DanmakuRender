@@ -8,11 +8,10 @@ def fix_cover(config, video_info: VideoInfo):
     if config.get("cover") != '':
         return
     cover_info = config.get('cover_auto')
-    cover_title = cover_info['title']
-    cover_desc = cover_info['desc']
-    cover_bottom = cover_info['bottom']
-    if cover_bottom == '' and cover_title == '' and cover_desc == '':
-        return
+    for k, v in cover_info.items():
+        if type(v) == str:
+            cover_info[k] = replace_keywords(v, video_info)
+
     cover_filename = f'.temp/biliuprs_cover_{int(time.time()) + 86400}.png'
-    create_cover(video_info.path, cover_filename, cover_title, cover_desc, cover_bottom)
+    create_cover(video_info.path, cover_filename, cover_info['title'], cover_info['desc'], cover_info['bottom'])
     config['cover'] = cover_filename
