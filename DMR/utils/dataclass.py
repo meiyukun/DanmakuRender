@@ -83,6 +83,7 @@ class FileInfo(cpdict):
         self.ctime = ctime
         from DMR.utils.utils import judge_time_period
         self.rtime = judge_time_period(ctime)
+        self.cstamp = str(ctime.timestamp()).replace('.', '').ljust(16, '0')[:16]
         super().__init__(
                 file_id=file_id,
                 dtype=dtype,

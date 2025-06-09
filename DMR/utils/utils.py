@@ -73,7 +73,7 @@ def get_platform(url:str) -> str:
         return 'bilibili'
     elif 'youtube.com' in url:
         return 'youtube'
-    
+
 def retry_safe(func, max_retries=5, sleep_interval=1):
     if max_retries <= 0:
         max_retries = 2**32-1
@@ -95,7 +95,7 @@ def rename_safe(src:str, dst:str, retry:int=10):
     if exists(dst):
         cnt = len(glob.glob(splitext(dst)[0] + '*'))
         dst = splitext(dst)[0] + f'({cnt})' + splitext(dst)[1]
-    
+
     while retry_cnt < retry:
         try:
             os.rename(src, dst)
@@ -173,7 +173,7 @@ def replace_keywords(string:str, kw_info:dict=None, replace_invalid:bool=False):
         kw_info = dict_wapper(kw_info)
 
     result = string.format_map(kw_info)
-    
+
     return result
 
 def replace_invalid_chars(string:str) -> str:
@@ -207,7 +207,7 @@ def replace_invalid_chars(string:str) -> str:
 
 def sec2hms(sec:float):
     sec = float(sec)
-    t_m,t_s = divmod(sec ,60)   
+    t_m,t_s = divmod(sec ,60)
     t_h,t_m = divmod(t_m,60)
     return t_h, t_m, t_s
 
@@ -222,7 +222,7 @@ def RGB2BGR(color):
 
 def uuid(len:int=None):
     struuid = uuid1().hex
-    if len is None: 
+    if len is None:
         return struuid
     return struuid[:len]
 
@@ -237,3 +237,24 @@ def judge_time_period(ctime):
         return '下午'
     else:
         return '晚上'
+
+# !!!一定要注意，这个会修改原字典！！！
+def replace_keywords_all(content, video_info:dict):
+    if isinstance(content, dict):
+        # 遍历字典的键值对
+        for k, v in content.items():
+            if isinstance(v, str):
+                # 处理字符串值
+                content[k] = replace_keywords(v, video_info)
+            elif isinstance(v, dict):
+                # 递归处理嵌套字典
+                replace_keywords_all(v, video_info)
+            elif isinstance(v, list):
+                # 直接替换列表中的元素
+                for i, item in enumerate(v):
+                    v[i] = replace_keywords_all(item, video_info)
+    elif isinstance(content, list):
+        # 直接替换列表中的元素
+        for i, item in enumerate(content):
+            content[i] = replace_keywords_all(item, video_info)
+    return content

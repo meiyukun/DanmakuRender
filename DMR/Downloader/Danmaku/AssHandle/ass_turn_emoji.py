@@ -44,7 +44,6 @@ emoji_map = {
     "[打脸]": "🤕",
     "[哈欠]": "🥱",
     "[震惊]": "🤯",
-    "[大金牙]": "🦷",
     "[偷笑]": "🤭",
     "[思考]": "🤔",
     "[可怜]": "🥺",
@@ -55,7 +54,7 @@ emoji_map = {
     "[生病]": "😷",
     "[奸笑]": "😏",
     "[得意]": "😎",
-    "[坏笑]": "😬",
+    "[坏笑]": "😏",
     "[抓狂]": "😫",
     "[钱]": "🤑",
     "[亲亲]": "😚",
@@ -84,7 +83,7 @@ emoji_map = {
     "[吐]": "🤮",
     "[流汗]": "😓",
     "[摸头]": "👐",
-    "[红脸]": "🥵",
+    "[红脸]": "😳",
     "[尬笑]": "😅",
     "[做鬼脸]": "😜",
     "[睡]": "😪",
@@ -93,7 +92,7 @@ emoji_map = {
     "[吐彩虹]": "🤮",
     "[大哭]": "😭",
     "[比心]": "🤟",
-    "[微笑袋鼠]": "🦘😊",
+    "[微笑袋鼠]": "😊",
     "[气球]": "🎈",
     "[虎头]": "🐯",
     "[抱抱你]": "🤗",
@@ -105,22 +104,20 @@ emoji_map = {
     "[疑问]": "🤔",
     "[互粉]": "🤝",
     "[好开心]": "🥳",
-    "[宕机]": "🖥😵",
+    "[宕机]": "😵",
     "[求抱抱]": "🤗",
     "[OK]": "👌",
     "[发呆]": "😳",
-    "[过年牛]": "🐮🧧",
+    "[过年牛]": "🐮",
     "[小鼓掌]": "👏",
-    "[勾引]": "🤘",
-    "[平安果]": "🍎🎄",
+    "[勾引]": "🤌",
+    "[平安果]": "🍎",
     "[困]": "😪",
     "[绝品大雷]": "⚡️",
     "[鞠躬]": "🙇",
-    "[九转大肠]": "🍖😣",
     "[打call]": "🎉",
     "[干饭人]": "🍚",
     "[躺平]": "🛌",
-    "[展开说说]": "📜",
     "[眼含热泪]": "🥹",
     "[泣不成声]": "😭",
     "[石化]": "🗿",
@@ -143,20 +140,26 @@ emoji_map = {
     "[求求了]": "🙏"
 
 }
+
+
 def replace_byline(text):
-    text=replace_emoji_in_text(text)
-    text=filter_at_symbol(text)
+    text = replace_emoji_in_text(text)
+    text = filter_at_symbol(text)
     return text
+
 
 def replace_emoji_in_text(text):
     # 正则匹配所有[xxx]格式的字符串
     pattern = re.compile(r'\[(.*?)\]')
+
     # 替换函数：存在则替换emoji，不存在则删除
     def replace_match(match):
         full_match = match.group(0)  # 获取完整匹配项（如[呵呵]）
         return emoji_map.get(full_match, '')  # 存在则返回emoji，否则返回空
 
     return pattern.sub(replace_match, text)  # 执行替换
+
+
 def filter_at_symbol(text):
     """移除文本中所有@符号及其后的非空内容"""
     # 匹配@符号及其后所有非空白字符
@@ -164,6 +167,7 @@ def filter_at_symbol(text):
     # 替换为空格并清理多余空白
     cleaned_text = at_pattern.sub('', text)
     return re.sub(r'\s+', ' ', cleaned_text).strip()
+
 
 def replace_emoji_in_ass(input_file):
     try:
@@ -185,8 +189,8 @@ def replace_emoji_in_ass(input_file):
 
 
 if __name__ == '__main__':
-    r=replace_emoji_in_text("很大声发电房[求求了][s][石化]")
+    r = replace_emoji_in_text("很大声发电房[求求了][s][石化]")
     print(r)
-    test_danmaku = "这是一条@测试弹幕 @标签1 @标签2内容dddfd"
-    cleaned = filter_at_symbol(test_danmaku)
+    test_danmaku = "这是[求求了]一条@测试弹幕 @标签1 @标签2内容dddfd"
+    cleaned = replace_byline(test_danmaku)
     print(cleaned)  # 输出: "这是一条 弹幕"

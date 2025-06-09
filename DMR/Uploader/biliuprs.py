@@ -187,9 +187,8 @@ class biliuprs():
 
     def format_config(self, config, video_info=None, replace_invalid=False):
         config = config.copy()
-        for k, v in config.items():
-            if type(v) == str:
-                config[k] = replace_keywords(v,video_info,replace_invalid = replace_invalid)
+        from DMR.utils.utils import replace_keywords_all
+        replace_keywords_all(config,video_info)
 
         if config.get('title'):
             config['title'] = replace_keywords(config['title'], video_info, replace_invalid=replace_invalid)

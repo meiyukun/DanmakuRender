@@ -2,7 +2,6 @@ import copy
 import logging
 import os
 import platform
-
 from .baserender import BaseRender
 from .ffmpeg import RawFFmpegRender
 from os.path import exists
@@ -34,7 +33,8 @@ class DmRender(BaseRender):
         self.logger = logging.getLogger(__name__)
         self.raw_ffmpeg = RawFFmpegRender(debug=self.debug)
 
-    def render_helper(self, video: str, danmaku: str, output: str, to_stdout: bool = False, logfile=None):
+    def render_helper(self, video: VideoInfo, danmaku: str, output: str, to_stdout: bool = False, logfile=None):
+        video_path=video.path
         ffmpeg_args = [self.ffmpeg, '-y']
         ffmpeg_args += self.hwaccel_args
 
@@ -42,9 +42,9 @@ class DmRender(BaseRender):
             if 'x' in str(self.output_resize):
                 scale_args = ['-s', self.output_resize]
             else:
-                w, h = FFprobe.get_resolution(video)
+                w, h = FFprobe.get_resolution(video_path)
                 if not (h and w):
-                    self.logger.warning(f'获取视频 {video} 分辨率失败, 将使用默认分辨率 1920x1080.')
+                    self.logger.warning(f'获取视频 {video_path} 分辨率失败, 将使用默认分辨率 1920x1080.')
                     w, h = 1920, 1080
                 scale = float(self.output_resize)
                 w, h = int(w*scale), int(h*scale)
@@ -54,12 +54,13 @@ class DmRender(BaseRender):
 
         if platform.system().lower() == 'windows':
             danmaku = danmaku.replace("\\", "/").replace(":/", "\\:/")
-        
+
+        video['danmaku'] = danmaku
         # 自定义video filter
         if self.advanced_render_args.get('filter_complex'):
             filter_name = '-filter_complex'
             filter_str = self.advanced_render_args.get('filter_complex')
-            filter_str = replace_keywords(filter_str, {'danmaku': danmaku})
+            filter_str = replace_keywords(filter_str, video)
         else:
             filter_name = '-vf'
             filter_str = 'subtitles=filename=\'%s\'' % danmaku
@@ -67,7 +68,7 @@ class DmRender(BaseRender):
         ffmpeg_args += [
             '-fflags', '+discardcorrupt+genpts',
             '-analyzeduration', '2147483647', '-probesize', '2147483647',
-            '-i', video,
+            '-i', video_path,
             filter_name, filter_str,
 
             '-c:v', self.vencoder,
@@ -93,7 +94,7 @@ class DmRender(BaseRender):
             output = valid_output   
 
         start_time = video.ctime
-        status, info = self.render_helper(video.path, danmaku, output, **kwargs)
+        status, info = self.render_helper(video, danmaku, output, **kwargs)
         if status:
             output_info:VideoInfo = copy.deepcopy(video)
             output_info.dtype = 'dm_video'
