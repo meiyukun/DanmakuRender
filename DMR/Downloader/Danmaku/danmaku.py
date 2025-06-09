@@ -187,6 +187,8 @@ class DanmakuDownloader():
                         dm.text = replace_keywords(dm_templ, dm)
                     if self.dm_available(dm):
                         retry = 0
+                        from DMR.Downloader.Danmaku.AssHandle.ass_turn_emoji import replace_byline
+                        dm.content = replace_byline(dm.content)
                         if self.dmwriter.add(dm):
                             last_dm_time = datetime.now().timestamp()
                     continue

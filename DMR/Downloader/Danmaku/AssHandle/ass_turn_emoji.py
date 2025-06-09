@@ -64,6 +64,7 @@ emoji_map = {
     "[快哭了]": "😥",
     "[翻白眼]": "🙄",
     "[赞]": "👍",
+    "[点赞]": "👍",
     "[鼓掌]": "👏",
     "[感谢]": "🙏",
     "[嘴唇]": "👄",
@@ -142,10 +143,27 @@ emoji_map = {
     "[求求了]": "🙏"
 
 }
-def replace_emoji_in_text(text):
-    for key, value in emoji_map.items():
-        text = text.replace(key, value)
+def replace_byline(text):
+    text=replace_emoji_in_text(text)
+    text=filter_at_symbol(text)
     return text
+
+def replace_emoji_in_text(text):
+    # 正则匹配所有[xxx]格式的字符串
+    pattern = re.compile(r'\[(.*?)\]')
+    # 替换函数：存在则替换emoji，不存在则删除
+    def replace_match(match):
+        full_match = match.group(0)  # 获取完整匹配项（如[呵呵]）
+        return emoji_map.get(full_match, '')  # 存在则返回emoji，否则返回空
+
+    return pattern.sub(replace_match, text)  # 执行替换
+def filter_at_symbol(text):
+    """移除文本中所有@符号及其后的非空内容"""
+    # 匹配@符号及其后所有非空白字符
+    at_pattern = re.compile(r'@\S+')
+    # 替换为空格并清理多余空白
+    cleaned_text = at_pattern.sub('', text)
+    return re.sub(r'\s+', ' ', cleaned_text).strip()
 
 def replace_emoji_in_ass(input_file):
     try:
@@ -166,3 +184,9 @@ def replace_emoji_in_ass(input_file):
         print(f"错误: 发生了一个未知错误: {e}")
 
 
+if __name__ == '__main__':
+    r=replace_emoji_in_text("很大声发电房[求求了][s][石化]")
+    print(r)
+    test_danmaku = "这是一条@测试弹幕 @标签1 @标签2内容dddfd"
+    cleaned = filter_at_symbol(test_danmaku)
+    print(cleaned)  # 输出: "这是一条 弹幕"

@@ -4,5 +4,5 @@ from DMR.Downloader.Danmaku.AssHandle.ass_turn_emoji import replace_emoji_in_ass
 
 def ass_handle_default(input):
     filter_ass_danmaku(input, input)
-    replace_emoji_in_ass(input)
-    filter_ass_at(input,input)
+    # replace_emoji_in_ass(input)
+    # filter_ass_at(input,input)
