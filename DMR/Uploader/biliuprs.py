@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import queue
@@ -186,7 +187,7 @@ class biliuprs():
             return False, log
 
     def format_config(self, config, video_info=None, replace_invalid=False):
-        config = config.copy()
+        config = copy.deepcopy(config)
         from DMR.utils.utils import replace_keywords_all
         replace_keywords_all(config,video_info)
 
