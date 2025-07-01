@@ -111,13 +111,13 @@ download_args:
     # 实际上这个东西就是弹幕密度，弹幕左右间距越大密度越小
     margin_w: 0.05
     # 指定弹幕占屏幕的最大比例（即屏幕上半部分有多少可以用来显示弹幕），默认为0.4
-    dmrate: 0.4
+    dmrate: 0.3
     # 指定弹幕字体，默认为微软雅黑字体(Microsoft YaHei)
     font: Microsoft YaHei
     # 指定弹幕字体大小，默认为36
     fontsize: 50
     # Distance from Screen Top 弹幕距离屏幕顶端的距离（像素，例如20，表示距离屏幕顶端20px）
-    dst: 20
+    dst: 40
     # 指定单条弹幕持续时间（秒），默认为16
     dmduration: 8
     # 指定弹幕不透明度，默认为0.8
@@ -304,7 +304,8 @@ render_args:
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
-      filter_complex: fps=fps=60,subtitles=filename='{DANMAKU}'
+      filter_complex: fps=fps=60,subtitles=filename='{DANMAKU}',drawtext=expansion=strftime:basetime='{CSTAMP}':text='%Y-%m-%d %H\:%M\:%S':x=(w-tw-20):y=30:fontcolor=white@0.5:fontsize=25:font=Microsoft YaHei
+
   # 原视频转码
   transcode:
     # 渲染输出文件夹，默认为在录制输出文件夹后面加上“转码后”
