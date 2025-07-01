@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 将当前目录下的所有文件复制到容器的 /app 目录
 COPY . .
-ENV BILIUP_VERSION=v0.2.0
+ENV BILIUP_VERSION=v0.2.3
 ENV TZ=Asia/Shanghai
 
 # 使用 linuxserver/ffmpeg 作为基础镜像
