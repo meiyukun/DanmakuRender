@@ -10,7 +10,7 @@ import time
 import subprocess
 
 from DMR.Uploader.cover.cover_main import fix_cover
-from DMR.utils import replace_keywords, ToolsList, VideoInfo
+from DMR.utils import *
 
 
 class biliuprs():
@@ -223,13 +223,26 @@ class biliuprs():
                 except Exception as e:
                     logging.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
                     config['cover'] = ''
-        if config.get('cover_auto'):
+        if not self.task_info.get('bvid') and config.get('cover_auto'):
             fix_cover(config,video_info)
         return config
 
     def upload(self, files:list[VideoInfo], **kwargs):
         if not isinstance(files, list):
             files = [files]
+        # 合并视频
+        if not kwargs['realtime'] and kwargs['concat_video']:
+            old_name, old_ext = os.path.splitext(os.path.basename(files[0].path))
+            dir_path = os.path.dirname(files[0].path)
+            new_video_name = f"{old_name}-合并{old_ext}"
+            new_video_name = os.path.join(dir_path, new_video_name)
+            self.logger.info(f'biliuprs: 正在合并视频至{new_video_name}')
+            try:
+                new_video = concat_video_ffmpeg(files, new_video_name)
+                files = [new_video]
+            except:
+                self.logger.warning(f'biliuprs: 合并失败，将分段上传：{files}')
+
         config = self.format_config(kwargs, files[0])
 
         if self._upload_lock.locked():

@@ -27,7 +27,7 @@ def concat_video_ffmpeg(video_list:list, output:str):
 
     cmds = [ToolsList.get('ffmpeg'), '-y', '-f', 'concat', '-safe', '0', '-i', video_list_file, '-c', 'copy', output]
     ffmpeg_logfile = get_tempfile(suffix='log')
-    start_time = datetime.now()
+    start_time = video_list[0].ctime
     with open(ffmpeg_logfile, 'w+', encoding='utf8') as f:
         proc = subprocess.Popen(cmds, stdin=subprocess.PIPE, stdout=f, stderr=subprocess.STDOUT)
         proc.wait()

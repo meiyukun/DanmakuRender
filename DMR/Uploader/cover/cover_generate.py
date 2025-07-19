@@ -1,13 +1,19 @@
 from PIL import Image, ImageDraw, ImageFont
-from moviepy import VideoFileClip
+# from moviepy import
 import datetime
+
+from moviepy.video.io.VideoFileClip import VideoFileClip
 
 
 def extract_cover_moviepy(video_path, output_path):
     try:
         clip = VideoFileClip(video_path)
 
-        clip.save_frame(output_path, t=clip.duration / 2)
+        try:
+            clip.save_frame(output_path, t=clip.duration / 2)
+        except:
+            clip.save_frame(output_path)
+
         clip.close()
     except Exception as e:
         print(f"提取封面帧失败: {e}")

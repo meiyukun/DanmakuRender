@@ -39,7 +39,7 @@ download_args:
     # 录播分段时间（秒），默认一个小时
     segment: 3600
     # 录制视频的格式，默认flv
-    output_format: mp4
+    output_format: flv
     # 是否录制弹幕
     danmaku: True
     # 是否录制直播流
@@ -307,7 +307,7 @@ render_args:
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
-      filter_complex: fps=fps=60,subtitles=filename='{DANMAKU}',drawtext=expansion=strftime:basetime='{CSTAMP}':text='%Y-%m-%d %H\:%M\:%S':x=(w-tw-20):y=30:fontcolor=white@0.5:fontsize=25:font=Microsoft YaHei
+      filter_complex: fps=fps=60,subtitles=filename='{DANMAKU}',drawtext=expansion=strftime:basetime='{CSTAMP}':text='%Y-%m-%d %H\:%M\:%S':x=(w-tw-25):y=15:fontcolor=white@0.6:fontsize=24:font=Microsoft YaHei
 
   # 原视频转码
   transcode:
@@ -368,6 +368,11 @@ upload_args:
     # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
     # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
     realtime: True
+    # 是否合并视频
+    # 如果设置为True，那么会把所有分段视频合并成一个视频再上传，默认False
+    # 使用实时上传时此功能不生效
+    # 使用此功能请确保延迟下播时间设置较短，否则不同分辨率的视频合并会导致上传失败
+    concat_video: False
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 10
     # 以下参数来自biliuprs，详细内容可以参考 https://biliup.github.io/biliup-rs/index.html
