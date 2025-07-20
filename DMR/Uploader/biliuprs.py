@@ -245,6 +245,10 @@ class biliuprs():
 
         config = self.format_config(kwargs, files[0])
 
+        # 延迟按第一个视频的开始时间来算
+        dtime = config['dtime']
+        config['dtime'] = dtime - int(time.time() - files[0].ctime.timestamp()) if dtime else 0
+
         if self._upload_lock.locked():
             self.logger.warning('上传速度慢于录制速度，可能导致上传队列阻塞！')
 
