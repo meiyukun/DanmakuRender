@@ -231,7 +231,7 @@ class biliuprs():
         if not isinstance(files, list):
             files = [files]
         # 合并视频
-        if not kwargs['realtime'] and kwargs['concat_video']:
+        if len(files) > 1 and not kwargs['realtime'] and kwargs['concat_video']:
             old_name, old_ext = os.path.splitext(os.path.basename(files[0].path))
             dir_path = os.path.dirname(files[0].path)
             new_video_name = f"{old_name}-合并{old_ext}"
