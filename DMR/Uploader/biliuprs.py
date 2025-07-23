@@ -69,14 +69,19 @@ class biliuprs():
         tid:int=65,
         title:str='',
         extra_args:list=None,
+        extra_upload_args: list = None,
+        extra_append_args: list = None,
         timeout:int=None,
         logfile=None,
         **kwargs
     ):
         if bvid:
             upload_args = self.base_args + ['append', '--vid', bvid]
+            upload_args += extra_append_args if extra_append_args else []
         else:
             upload_args = self.base_args + ['upload']
+            upload_args += extra_append_args if extra_upload_args else []
+
 
         dtime = dtime + int(time.time()) if dtime else 0
         upload_args += [

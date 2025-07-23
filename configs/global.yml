@@ -411,6 +411,10 @@ upload_args:
     # 额外参数列表
     # 此参数将直接传入biliup-rs，可以用来设置一些特殊的功能，例如仅自己可见
     extra_args: ~
+    # 此参数只传入biliup-rs的upload命令
+    extra_upload_args: ~
+    # 此参数只传入biliup-rs的append命令
+    extra_append_args: ~
   
   # 上传到YouTube
   # 此功能使用较复杂，细节请参考文档
