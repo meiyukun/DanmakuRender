@@ -53,7 +53,7 @@ if __name__ == '__main__':
     file_handler = logging.handlers.TimedRotatingFileHandler(log_file, when='D', interval=1, backupCount=3, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter("[%(asctime)s][%(module)s][%(levelname)s]: %(message)s"))
-    
+
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
 
@@ -65,6 +65,7 @@ if __name__ == '__main__':
     try:
         while 1:
             time.sleep(60)
+            file_handler.flush()
     except KeyboardInterrupt:
         dmr.stop()
         exit(0)
