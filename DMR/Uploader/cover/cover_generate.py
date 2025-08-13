@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image, ImageDraw, ImageFont
 # from moviepy import
 import datetime
@@ -5,18 +7,31 @@ import datetime
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 
-def extract_cover_moviepy(video_path, output_path):
-    try:
-        clip = VideoFileClip(video_path)
-
+def extract_cover_moviepy(video_path, output_path, timeout=10):
+    def process():
         try:
-            clip.save_frame(output_path, t=clip.duration / 2)
-        except:
-            clip.save_frame(output_path)
+            clip = VideoFileClip(video_path)
 
-        clip.close()
-    except Exception as e:
-        print(f"提取封面帧失败: {e}")
+            try:
+                clip.save_frame(output_path, t=clip.duration / 2)
+            except:
+                clip.save_frame(output_path)
+
+            clip.close()
+        except Exception as e:
+            print(f"提取封面帧失败: {e}")
+            return False
+        return True
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(process)
+    try:
+        result = future.result(timeout=timeout)
+        return result
+    except TimeoutError:
+        raise TimeoutError(f"提取封面超时，超过{timeout}秒")
+    finally:
+        executor.shutdown(wait=False)
 
 
 def get_adaptive_font(draw, text, img_width, max_font_size, min_font_size):
