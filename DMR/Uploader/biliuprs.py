@@ -203,8 +203,6 @@ class biliuprs():
                 self.logger.warning(f'视频标题超过80字符，已自动截取为: {config["title"]}.')
         if config.get('desc'):
             config['desc'] = replace_keywords(config['desc'], video_info, replace_invalid=replace_invalid)
-            if len(config['desc']) > 250:
-                self.logger.warning(f'视频简介超过250字符，可能导致实时上传失败.')
         if config.get('dynamic'):
             config['dynamic'] = replace_keywords(config['dynamic'], video_info, replace_invalid=replace_invalid)
         if config.get('tag'):
@@ -226,7 +224,7 @@ class biliuprs():
                     config['cover'] = cover_filename
 
                 except Exception as e:
-                    logging.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
+                    self.logger.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
                     config['cover'] = ''
         if not self.task_info.get('bvid') and config.get('cover_auto'):
             fix_cover(config,video_info)
