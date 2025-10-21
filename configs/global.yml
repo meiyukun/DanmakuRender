@@ -359,7 +359,7 @@ upload_args:
   # 上传到B站
   bilibili:
     # 上传引擎，可选biliuprs或者biliwebapi
-    engine: biliuprs
+    engine: biliwebapi
     # 上传账号名称，程序依靠这个来识别不同的账号，如果打算传不同账号就要设置不同的名称
     account: bilibili
     # 上传cookies路径，如果设置为空将会保存到./login_info/{ACCOUNT}.json
@@ -424,6 +424,8 @@ upload_args:
     # 以下参数仅biliwebapi生效
     # 视频分P排序，默认False（按实际上传的时间排序），设置为True则按文件名称排序
     sort_videos: False
+    # 是否将新的视频插入到列表头部，默认False。每次有新的分P视频时，会将其插入到列表头部，然后再进行后面的排序（如有）。
+    insert_head: False
     # 杜比音频? 0-关闭 1-开启
     dolby: 0
     # hires音频? 0-关闭 1-开启

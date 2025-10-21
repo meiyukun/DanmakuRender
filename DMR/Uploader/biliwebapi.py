@@ -39,12 +39,15 @@ class BiliWebApi:
         account:str=None,
         limit=3,
         sort_videos:bool=False,
+        insert_head:bool=False,
         **kwargs,
     ):
         self.cookies = cookies
         self.account = account
+        self.cookies_path =  cookies if cookies else f'.login_info/{account}.json'
         self.limit = limit
         self.sort_videos = sort_videos
+        self.insert_head = insert_head
 
         self.app_key = 'ae57252b0c09105d'
         self.appsec = 'c75875c596a69eb55bd119e74b07cfe3'
@@ -111,7 +114,7 @@ class BiliWebApi:
                 min_cost = cost
         auto_os['cost'] = min_cost
         return auto_os
-    
+
     def creditsToDesc_v2(self, desc:str, credits:List[Dict[str, Union[str, int]]]):
         desc_v2 = []
         desc_v2_tmp = desc
@@ -154,7 +157,7 @@ class BiliWebApi:
             extra_kwargs=config.get('extra_kwargs', {}),
         )
         if config.get('dtime') and config['dtime'] >= 14400:
-            video.delay_time(int(time.time() + config['dtime']))
+            video.delay_time(int(video_info.ctime.timestamp() + config['dtime']))
         if config.get('title'):
             video.title = replace_keywords(config['title'], video_info)
             if len(config['title']) > 80:
@@ -201,8 +204,31 @@ class BiliWebApi:
         stream_queue: queue.SimpleQueue=None,
         **kwargs,
     ):
+        first_sec = False
+
+        # 合并视频
+        if len(files) > 1 and not kwargs['realtime'] and kwargs['concat_video']: # and files[0].dtype != 'src_video':
+            old_name, old_ext = os.path.splitext(os.path.basename(files[0].path))
+            dir_path = os.path.dirname(files[0].path)
+            new_video_name = f"{old_name}-合并{old_ext}"
+            new_video_name = os.path.join(dir_path, new_video_name)
+            logger.info(f'正在合并视频至{new_video_name}')
+            try:
+                from DMR.utils import concat_video_ffmpeg
+                new_video = concat_video_ffmpeg(files, new_video_name)
+                files = [new_video]
+            except:
+                logger.warning(f'biliuprs: 合并失败，将分段上传：{files}')
+
         if not self.videos:
+            first_sec = True
             self.videos = self.videoinfo_to_videos(files[0], kwargs)
+            # 自动创建封面
+            if kwargs.get('cover_auto'):
+                from DMR.Uploader.cover.cover_main import fix_cover
+                fix_cover(kwargs, files[0])
+                self.videos.cover =self.cover_up(kwargs.get('cover'))
+
         if stream_queue is None:
             for file in files:
                 status, info = self.upload_file(
@@ -212,7 +238,7 @@ class BiliWebApi:
                     submit_api='web'
                 )
             # self.submit(submit_api='web', videos=self.videos)
-                
+
         else:
             status, info = self.upload_stream(
                 stream_queue=stream_queue,
@@ -222,6 +248,19 @@ class BiliWebApi:
                 videos=self.videos,
                 submit_api='web'
             )
+
+        if first_sec :
+            section_id = kwargs['section_id']
+            if section_id:
+                if kwargs['section_title']:
+                    title = replace_keywords(kwargs['section_title'], files[0])
+                else:
+                    title = kwargs['title']
+                from DMR.Uploader.biliapi.bili_section import add_video_to_bilibili_section
+                ret = add_video_to_bilibili_section(cookies=self.cookies_path, bvid=info, title=title,
+                                                    section_id=section_id, )
+                logger.info("加入合集:%s:%s", section_id, ret)
+
         return status, info
 
     def cover_up(self, img: str):
@@ -341,7 +380,12 @@ class BiliWebApi:
 
         if new_videos := self.get_remote_data(videos.bvid):
             videos = new_videos
-        videos.append(video_part)  # 添加已经上传的视频
+
+        # 如果insert_head为True，则将新的视频插入到列表头部
+        if self.insert_head:
+            videos.videos.insert(0, video_part)
+        else:
+            videos.append(video_part)  # 添加已经上传的视频
 
         ret = self.submit(submit_api=submit_api, videos=videos)
         logger.info(f"上传成功: {ret}")
@@ -374,15 +418,15 @@ class BiliWebApi:
         # print(upload_id, chunks, chunk_size, total_size)
         logger.info(
             f"{file_name} - upload_id: {upload_id}, chunks: {chunks}, chunk_size: {chunk_size}, total_size: {total_size}")
-        
-        
+
+
         if isinstance(stream_queue, (str, os.PathLike)):
             # 文件路径
             chunk_generator = self.file_reader_generator(stream_queue, chunk_size)
         else:
             # 视频流队列
             chunk_generator = self.queue_reader_generator(stream_queue, chunk_size, total_size)
-        
+
         n = 0
         st = time.perf_counter()
         max_workers = self.limit
@@ -645,7 +689,7 @@ class BiliWebApi:
             api = 'https://member.bilibili.com/x/vu/web/edit?csrf=' + self.__bili_jct
         return self._session.post(api, timeout=5,
                                    json=post_data).json()
-    
+
     def stop(self):
         self.stoped = True
 

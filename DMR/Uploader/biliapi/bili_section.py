@@ -3,11 +3,12 @@ import requests
 
 
 def add_video_to_bilibili_section(
+        cookies: str,
         bvid: str,
         title: str,
         section_id: int,
 ) -> dict:
-    cookie, csrf = read_bilibili_cookies()
+    cookie, csrf = read_bilibili_cookies(cookies)
     return _add_video_to_bilibili_season(csrf, title, bvid, section_id, cookie)
 
 
