@@ -20,7 +20,7 @@ class RawFFmpegRender(BaseRender):
 
     def call_ffmpeg(self, cmds, **kwargs):
         ffmpeg_args = [str(x) for x in cmds]
-        self.logger.debug(f'ffmpeg render args: {ffmpeg_args}')
+        self.logger.debug(f'ffmpeg render args: {" ".join(ffmpeg_args)}')  # 将列表转换为空格分隔的字符串
 
         with tempfile.TemporaryFile() as logfile:
             if self.debug:

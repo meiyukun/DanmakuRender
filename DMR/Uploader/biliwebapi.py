@@ -227,7 +227,9 @@ class BiliWebApi:
             if kwargs.get('cover_auto'):
                 from DMR.Uploader.cover.cover_main import fix_cover
                 fix_cover(kwargs, files[0])
-                self.videos.cover =self.cover_up(kwargs.get('cover'))
+                cover = kwargs.get('cover')
+                if cover:
+                    self.videos.cover =self.cover_up(cover)
 
         if stream_queue is None:
             for file in files:
