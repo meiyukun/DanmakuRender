@@ -29,5 +29,6 @@ jobs:
           context: .  # Docker 构建上下文
           file: ./Dockerfile  # Dockerfile 的路径
           push: true  # 推送镜像到仓库
-          tags: |
-            ${{ secrets.DOCKER_REGISTRY_URL }}/cyansfog/danmakurender:latest
+          platforms: linux/amd64,linux/arm64  # 关键：指定要构建的两个架构
+          tags: |  # 为不同架构打标签，同时保留统一latest标签
+              ${{ secrets.DOCKER_REGISTRY_URL }}/cyansfog/danmakurender:latest
