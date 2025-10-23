@@ -205,7 +205,8 @@ class BiliWebApi:
         **kwargs,
     ):
         first_sec = False
-
+        # 记录是否需要插入头，合并失败时不要倒序上传
+        ori_insert_head = self.insert_head
         # 合并视频
         if len(files) > 1 and not kwargs['realtime'] and kwargs['concat_video']: # and files[0].dtype != 'src_video':
             old_name, old_ext = os.path.splitext(os.path.basename(files[0].path))
@@ -218,6 +219,7 @@ class BiliWebApi:
                 new_video = concat_video_ffmpeg(files, new_video_name)
                 files = [new_video]
             except:
+                self.insert_head = False
                 logger.warning(f'biliuprs: 合并失败，将分段上传：{files}')
 
         if not self.videos:
@@ -251,6 +253,11 @@ class BiliWebApi:
                 submit_api='web'
             )
 
+        ret = self.submit(submit_api='web',videos=self.videos)
+        logger.info(f"上传成功: {ret}")
+        info = ret['data']['bvid']
+        self.videos.bvid = info
+
         if first_sec :
             section_id = kwargs['section_id']
             if section_id:
@@ -263,6 +270,8 @@ class BiliWebApi:
                                                     section_id=section_id, )
                 logger.info("加入合集:%s:%s", section_id, ret)
 
+        # 还原insert_head
+        self.insert_head = ori_insert_head
         return status, info
 
     def cover_up(self, img: str):
@@ -380,8 +389,6 @@ class BiliWebApi:
             return False, '分P上传失败'
         video_part['title'] = video_part['title'][:80]
 
-        if new_videos := self.get_remote_data(videos.bvid):
-            videos = new_videos
 
         # 如果insert_head为True，则将新的视频插入到列表头部
         if self.insert_head:
@@ -389,11 +396,7 @@ class BiliWebApi:
         else:
             videos.append(video_part)  # 添加已经上传的视频
 
-        ret = self.submit(submit_api=submit_api, videos=videos)
-        logger.info(f"上传成功: {ret}")
-        bvid = ret['data']['bvid']
-        videos.bvid = bvid
-        return True, bvid
+        return True, videos.bvid
 
     async def upos_stream(self, stream_queue, file_name, total_size, ret):
         # print("--------------, ", file_name)
