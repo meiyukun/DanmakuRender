@@ -28,6 +28,8 @@ class Render():
         self.render_executors = ThreadPoolExecutor(max_workers=self.nrenders)
         self._lock = threading.Lock()
 
+        self.task_order = []  # 按添加顺序存储任务UUID
+
     def _pipeSend(self, event, msg, target='engine', dtype=None, data=None, **kwargs):
         if self.send_queue:
             msg = PipeMessage(
@@ -74,31 +76,47 @@ class Render():
             }
             self.render_tasks[task['uuid']] = task
             self.render_executors.submit(self._render_subprocess, task)
+            self.task_order.append(task)  # 将任务添加到队列中
 
     def _gather(self, task, status, desc=''):
         with self._lock:
-            self.render_tasks.pop(task['uuid'])
-            if status == 'error':
-                self._pipeSend(
-                    event='error',
-                    msg=f"渲染视频{task['output']}时出现错误: {desc}",
-                    target=task['source'],
-                    request_id=task['request_id'],
-                    dtype=str(type(desc)),
-                    data=desc,
-                )
-            else:
-                self._pipeSend(
-                    event='end',
-                    msg=f"视频{task['output']}渲染完成",
-                    target=task['source'],
-                    request_id=task['request_id'],
-                    dtype='dict',
-                    data={
-                        'config': task['config'],
-                        'output': desc,
-                    },
-                )
+            task['completed'] = True
+            task['status'] = status
+            task['desc'] = desc
+            # ===== 新增：检查同组前置任务是否全部完成 =====
+            current_group_id = task['video']['group_id']
+            # 取出同组任务在 tasker_order 中的切片
+            same_group_tasks = [t for t in self.task_order if t['video'].group_id == current_group_id]
+            current_index = same_group_tasks.index(task)
+            if current_index != 0:
+                return
+            # 检查同组后面的任务是否全部完成，如完成一并提交
+            for task in same_group_tasks:
+                if not task['completed']: return
+                self.task_order.remove(task)
+                desc = task['desc']
+                self.render_tasks.pop(task['uuid'])
+                if task['status'] == 'error':
+                    self._pipeSend(
+                        event='error',
+                        msg=f"渲染视频{task['output']}时出现错误: {desc}",
+                        target=task['source'],
+                        request_id=task['request_id'],
+                        dtype=str(type(desc)),
+                        data=desc,
+                    )
+                else:
+                    self._pipeSend(
+                        event='end',
+                        msg=f"视频{task['output']}渲染完成",
+                        target=task['source'],
+                        request_id=task['request_id'],
+                        dtype='dict',
+                        data={
+                            'config': task['config'],
+                            'output': desc,
+                        },
+                    )
 
     def _render_subprocess(self, task):
         try:
@@ -122,7 +140,6 @@ class Render():
             self._render_class[task['uuid']] = target_render
             status, info = target_render.render_one(video=video, output=output)
             self._render_class.pop(task['uuid'])
-
             if status:
                 self._gather(task, 'info', desc=info)
             else:
