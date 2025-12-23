@@ -28,7 +28,7 @@ if __name__ == '__main__':
     config = Config(args.global_config, args.config)
     
     for name, rep_conf in config.replay_config.items():
-        config.replay_config[name]['download_args']['segment'] = 30
+        config.replay_config[name]['download_args']['segment'] = 20
         for upd_type, upd_configs in rep_conf.get('upload_args', {}).items():
             for upid, upd_conf in enumerate(upd_configs):
                 config.replay_config[name]['upload_args'][upd_type][upid]['dtime'] = 86400
@@ -57,7 +57,7 @@ if __name__ == '__main__':
     logger.info('正在启动测试...')
     dmr.start()
 
-    time.sleep(180)
+    time.sleep(40)
     for taskname, task in dmr.engine.task_dict.items():
         msg = PipeMessage(
             source='dryrun',
@@ -71,7 +71,7 @@ if __name__ == '__main__':
     # logging.info('录制完成，请检查录制文件')
     try:
         while 1:
-            time.sleep(60)
+            time.sleep(90)
     except KeyboardInterrupt:
         dmr.stop()
         exit(0)

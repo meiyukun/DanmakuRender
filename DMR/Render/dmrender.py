@@ -18,6 +18,9 @@ class DmRender(BaseRender):
                  advanced_render_args: dict=None,
                  ffmpeg: str = None,
                  debug=False,
+                 before_cmd:str=None,
+                 after_cmd:str=None,
+                 extra_inputs:list=None,
                  **kwargs
                  ):
         self.hwaccel_args = hwaccel_args if hwaccel_args is not None else []
@@ -29,6 +32,9 @@ class DmRender(BaseRender):
         self.advanced_render_args = advanced_render_args if isinstance(advanced_render_args, dict) else {}
         self.ffmpeg = ffmpeg if ffmpeg else ToolsList.get('ffmpeg')
         self.debug = debug
+        self.before_cmd = before_cmd
+        self.after_cmd = after_cmd
+        self.extra_inputs = extra_inputs if extra_inputs is not None else []
 
         self.logger = logging.getLogger(__name__)
         self.raw_ffmpeg = RawFFmpegRender(debug=self.debug)
@@ -37,6 +43,14 @@ class DmRender(BaseRender):
         video_path=video.path
         ffmpeg_args = [self.ffmpeg, '-y']
         ffmpeg_args += self.hwaccel_args
+        # 渲染前后执行的Python脚本
+        if self.before_cmd:
+            self._execute_python_script(self.before_cmd, video, "before_render")
+
+        extra_inputs = []
+
+        for i, extra_input in enumerate(self.extra_inputs):
+            extra_inputs.append(replace_keywords(extra_input, video))
 
         if self.output_resize:
             if 'x' in str(self.output_resize):
@@ -60,7 +74,7 @@ class DmRender(BaseRender):
         if self.advanced_render_args.get('filter_complex'):
             filter_name = '-filter_complex'
             filter_str = self.advanced_render_args.get('filter_complex')
-            filter_str = replace_keywords(filter_str, video)
+            filter_str = replace_keywords(filter_str, video).replace("\n", "").replace("\r", "")
         else:
             filter_name = '-vf'
             filter_str = 'subtitles=filename=\'%s\'' % danmaku
@@ -69,6 +83,7 @@ class DmRender(BaseRender):
             '-fflags', '+discardcorrupt+genpts',
             '-analyzeduration', '2147483647', '-probesize', '2147483647',
             '-i', video_path,
+            *extra_inputs,
             filter_name, filter_str,
 
             '-c:v', self.vencoder,
@@ -79,8 +94,12 @@ class DmRender(BaseRender):
             *scale_args,
             output,
         ]
+        status, info = self.raw_ffmpeg.call_ffmpeg(ffmpeg_args)
 
-        return self.raw_ffmpeg.call_ffmpeg(ffmpeg_args)
+        if self.after_cmd:
+            self._execute_python_script(self.after_cmd, video, "after_render")
+
+        return status, info
 
     def render_one(self, video: VideoInfo, output: str, **kwargs):
         if not exists(video.path):
@@ -108,6 +127,29 @@ class DmRender(BaseRender):
             return status, output_info
         else:
             return status, info
+
+    def _execute_python_script(self, script: str, video: VideoInfo, script_name: str):
+        """执行Python脚本"""
+        try:
+            # 替换脚本中的关键词
+            processed_script = replace_keywords(script, video)
+            
+            # 准备执行环境
+            exec_globals = {
+                'video': video,
+                'os': os,
+                'platform': platform,
+                'logger': self.logger,
+            }
+            exec_locals = {}
+            
+            # 执行脚本
+            self.logger.info(f"执行 {script_name} Python脚本")
+            exec(processed_script, exec_globals, exec_locals)
+            
+        except Exception as e:
+            self.logger.error(f"执行 {script_name} Python脚本时发生错误: {str(e)}")
+            raise
 
     def stop(self):
         self.logger.debug('ffmpeg render stop.')

@@ -291,7 +291,7 @@ render_args:
     # 渲染文件名称，默认在录制文件后面加上“弹幕版”
     output_name: ~
     # 生成的视频文件格式，默认mp4
-    format: mp4
+    format: mkv
     # 硬件解码参数，默认由FFmpeg自动判断，如果出现问题可以设为空
     hwaccel_args: [-hwaccel, auto]
     # 视频编码器，NVIDIA设置为h264_nvenc，AMD设置为h264_amf，Apple用户设置为h264_videotoolbox，CPU设置为libx264
@@ -313,6 +313,14 @@ render_args:
     output_resize: ~
     # 高级渲染参数
     # 请确保你明白这些参数的含义后再修改
+
+    # 渲染前后执行的命令
+    # 可以用来执行一些额外的操作，例如修改视频文件的元信息，是python中的命令
+    before_cmd: ~
+    after_cmd: ~
+    # 额外输入文件，用于合并多个视频文件，放在原视频-i之后
+    extra_inputs: ~
+
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
