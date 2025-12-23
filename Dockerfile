@@ -6,7 +6,7 @@ WORKDIR /app
 # 将当前目录下的所有文件复制到容器的 /app 目录
 COPY . .
 ARG TARGETARCH
-ENV BILIUP_VERSION=v0.2.4
+ENV BILIUP_VERSION=v1.1.28
 ENV TZ=Asia/Shanghai
 
 # 使用 linuxserver/ffmpeg 作为基础镜像
@@ -42,7 +42,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     else \
         echo "Unsupported architecture: $TARGETARCH" && exit 1; \
     fi && \
-    wget -O biliup-rs.tar.xz https://github.com/biliup/biliup-rs/releases/download/${BILIUP_VERSION}/biliupR-${BILIUP_VERSION}-${BILIUP_ARCH}-linux.tar.xz && \
+    wget -O biliup-rs.tar.xz https://github.com/biliup/biliup/releases/download/${BILIUP_VERSION}/biliupR-${BILIUP_VERSION}-${BILIUP_ARCH}-linux.tar.xz && \
     tar -xf biliup-rs.tar.xz -C . && \
     mv ./biliupR-${BILIUP_VERSION}-${BILIUP_ARCH}-linux/biliup ./tools/ && \
     rm ./biliup-rs.tar.xz && \
