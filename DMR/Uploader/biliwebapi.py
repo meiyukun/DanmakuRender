@@ -259,7 +259,7 @@ class BiliWebApi:
         self.videos.bvid = info
 
         if first_sec :
-            section_id = kwargs['section_id']
+            section_id = kwargs.get('section_id', None)
             if section_id:
                 if kwargs['section_title']:
                     title = replace_keywords(kwargs['section_title'], files[0])

@@ -41,7 +41,7 @@ class DmRender(BaseRender):
 
     def render_helper(self, video: VideoInfo, danmaku: str, output: str, to_stdout: bool = False, logfile=None):
         video_path=video.path
-        ffmpeg_args = [self.ffmpeg, '-y']
+        ffmpeg_args = [self.ffmpeg if self.ffmpeg else 'ffmpeg', '-y']
         ffmpeg_args += self.hwaccel_args
         # 渲染前后执行的Python脚本
         if self.before_cmd:
