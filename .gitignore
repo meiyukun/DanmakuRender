@@ -4,6 +4,9 @@
 /venv/
 /test**
 /live/
+输出/
+
+*.7z
 replay-**.yml
 DMR-**.yml
 **.exe

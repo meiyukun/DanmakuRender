@@ -15,19 +15,19 @@ from DMR.utils import *
 
 class biliuprs():
 
-    def __init__(self,
-                 cookies:str=None,
-                 account:str=None,
+    def __init__(self, 
+                 cookies:str=None, 
+                 account:str=None, 
                  task_upload_lock:bool=True,
-                 debug=False,
-                 biliup:str=None,
+                 debug=False, 
+                 biliup:str=None, 
                  **kwargs,
     ) -> None:
         self.biliup = biliup if biliup else ToolsList.get('biliup')
 
         if not (cookies or account):
             raise ValueError('cookies or account must be set.')
-
+        
         if cookies is None:
             self.account = account
             self.cookies = f'.login_info/{account}.json'
@@ -52,8 +52,8 @@ class biliuprs():
     def __del__(self):
         self.stop()
 
-    def call_biliuprs(self,
-        video,
+    def call_biliuprs(self, 
+        video, 
         bvid:str=None,
         copyright:int=1,
         cover:str='',
@@ -63,7 +63,6 @@ class biliuprs():
         line:str=None,
         limit:int=3,
         no_reprint:int=1,
-        open_elec:int=1,
         source:str='',
         tag:str='',
         tid:int=65,
@@ -92,7 +91,6 @@ class biliuprs():
             '--dynamic', dynamic,
             '--limit', limit,
             '--no-reprint', no_reprint,
-            '--open-elec', open_elec,
             '--source', source,
             '--tag', tag,
             '--tid', tid,
@@ -110,7 +108,7 @@ class biliuprs():
 
         upload_args = [str(x) for x in upload_args]
         self.logger.debug(f'biliuprs: {upload_args}')
-
+        
         if not logfile:
             logfile = sys.stdout
 
@@ -118,10 +116,10 @@ class biliuprs():
             upload_proc = subprocess.Popen(upload_args, stdin=subprocess.PIPE, stdout=sys.stdout, stderr=subprocess.STDOUT, bufsize=10**8)
         else:
             upload_proc = subprocess.Popen(upload_args, stdin=subprocess.PIPE, stdout=logfile, stderr=subprocess.STDOUT, bufsize=10**8)
-
+        
         try:
             self._upload_procs[upload_proc.pid] = upload_proc
-            if timeout:
+            if timeout: 
                 upload_proc.wait(timeout=timeout)
             else:
                 upload_proc.wait()
@@ -130,9 +128,9 @@ class biliuprs():
         finally:
             upload_proc.kill()
             self._upload_procs.pop(upload_proc.pid)
-
-        return logfile
-
+        
+        return logfile, upload_args
+    
     def islogin(self):
         renew_args = self.base_args + ['renew']
         proc = subprocess.Popen(renew_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=10**8)
@@ -154,7 +152,7 @@ class biliuprs():
             if self.islogin():
                 self.logger.info(f'将 {self.account} 的登录信息保存到 {self.cookies}.')
                 break
-
+        
         self.logger.error(f'{self.account} 登录失败!.')
 
     def upload_once(self, video, bvid=None, **config):
@@ -162,7 +160,7 @@ class biliuprs():
             self.call_biliuprs(video=video, bvid=bvid, logfile=logfile, **config)
             if self.debug:
                 return True, ''
-
+        
             out_bvid = None
             log = ''
             logfile.seek(0)
@@ -254,7 +252,7 @@ class biliuprs():
 
         if self._upload_lock.locked():
             self.logger.warning('上传速度慢于录制速度，可能导致上传队列阻塞！')
-
+        
         video_files = [f.path for f in files]
         status, bvid = False, ''
 

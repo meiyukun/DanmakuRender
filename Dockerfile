@@ -8,7 +8,7 @@ COPY . .
 ARG TARGETARCH
 ENV BILIUP_VERSION=v1.1.28
 ENV TZ=Asia/Shanghai
-
+EXPOSE 5000
 # 使用 linuxserver/ffmpeg 作为基础镜像
 
 
@@ -33,7 +33,7 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1
 
 
 # 更新包列表并安装DMR必要的依赖
-RUN apt-get install -y fontconfig nodejs npm && pip install -r requirements.txt && pip install --use-pep517 quickjs
+RUN apt-get install -y fontconfig nodejs npm && pip install --ignore-installed -r requirements.txt && pip install --use-pep517 quickjs
 
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
         BILIUP_ARCH="x86_64"; \

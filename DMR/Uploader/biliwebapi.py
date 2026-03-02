@@ -114,7 +114,7 @@ class BiliWebApi:
                 min_cost = cost
         auto_os['cost'] = min_cost
         return auto_os
-
+    
     def creditsToDesc_v2(self, desc:str, credits:List[Dict[str, Union[str, int]]]):
         desc_v2 = []
         desc_v2_tmp = desc
@@ -154,6 +154,7 @@ class BiliWebApi:
             is_only_self=config.get('is_only_self', 0),
             charging_pay=config.get('charging_pay', 0),
             open_subtitle=config.get('open_subtitle', False),
+            no_disturbance=config.get('no_disturbance', 0),
             extra_kwargs=config.get('extra_kwargs', {}),
         )
         if config.get('dtime') and config['dtime'] >= 14400:
@@ -204,7 +205,7 @@ class BiliWebApi:
         stream_queue: queue.SimpleQueue=None,
         **kwargs,
     ):
-        first_sec = False
+        is_new = False
         # 记录是否需要插入头，合并失败时不要倒序上传
         ori_insert_head = self.insert_head
         # 合并视频
@@ -223,7 +224,7 @@ class BiliWebApi:
                 logger.warning(f'biliuprs: 合并失败，将分段上传：{files}')
 
         if not self.videos:
-            first_sec = True
+            is_new = True
             self.videos = self.videoinfo_to_videos(files[0], kwargs)
             # 自动创建封面
             if kwargs.get('cover_auto'):
@@ -233,6 +234,8 @@ class BiliWebApi:
                 if cover:
                     self.videos.cover =self.cover_up(cover)
 
+        else:
+            self.videos = self.get_remote_data(self.videos.bvid) or self.videos       # 刷新视频信息
         if stream_queue is None:
             for file in files:
                 status, info = self.upload_file(
@@ -242,7 +245,7 @@ class BiliWebApi:
                     submit_api='web'
                 )
             # self.submit(submit_api='web', videos=self.videos)
-
+                
         else:
             status, info = self.upload_stream(
                 stream_queue=stream_queue,
@@ -258,21 +261,53 @@ class BiliWebApi:
         info = ret['data']['bvid']
         self.videos.bvid = info
 
-        if first_sec :
+        # 加入合集
+        if is_new :
             section_id = kwargs.get('section_id', None)
-            if section_id:
-                if kwargs['section_title']:
-                    title = replace_keywords(kwargs['section_title'], files[0])
-                else:
-                    title = kwargs['title']
+            section_title = self.videos.title
+            if kwargs['section_title']:
+                section_title = replace_keywords(kwargs['section_title'], files[0])
+
+            if kwargs.get('epid') :#官方实现
+                epid = kwargs['epid']
+                self.add_episodes(epid, self.videos.bvid, section_title)
+            elif section_id:
                 from DMR.Uploader.biliapi.bili_section import add_video_to_bilibili_section
-                ret = add_video_to_bilibili_section(cookies=self.cookies_path, bvid=info, title=title,
+                ret = add_video_to_bilibili_section(cookies=self.cookies_path, bvid=info, title=section_title,
                                                     section_id=section_id, )
                 logger.info("加入合集:%s:%s", section_id, ret)
 
         # 还原insert_head
         self.insert_head = ori_insert_head
         return status, info
+
+    def add_episodes(self, epid, bvid, title):
+        try:
+            uri = f'https://member.bilibili.com/x2/creative/web/season?id={epid}'
+            resp = self._session.get(uri, timeout=5).json()
+            section_id = resp['data']['sections']['sections'][0]['id']
+        except Exception as e:
+            logger.error(f'获取合集信息失败: {e}')
+            return False
+
+        try:
+            uri = f'https://member.bilibili.com/x2/creative/web/season/section/episodes/add?csrf={self.__bili_jct}'
+            data = {
+                "sectionId": section_id,
+                "episodes":[{
+                    "title": title,
+                    "bvid": bvid,
+                }]
+            }
+            resp = self._session.post(uri, json=data, timeout=5).json()
+            if resp['code'] == 0:
+                logger.info(f'添加合集成功: {bvid} -> {epid}')
+                return True
+            else:
+                logger.error(f'添加{bvid}到合集失败: {resp}')
+        except Exception as e:
+            logger.error(f'添加{bvid}到合集失败: {e}')
+        return False
 
     def cover_up(self, img: str):
         """
@@ -423,15 +458,15 @@ class BiliWebApi:
         # print(upload_id, chunks, chunk_size, total_size)
         logger.info(
             f"{file_name} - upload_id: {upload_id}, chunks: {chunks}, chunk_size: {chunk_size}, total_size: {total_size}")
-
-
+        
+        
         if isinstance(stream_queue, (str, os.PathLike)):
             # 文件路径
             chunk_generator = self.file_reader_generator(stream_queue, chunk_size)
         else:
             # 视频流队列
             chunk_generator = self.queue_reader_generator(stream_queue, chunk_size, total_size)
-
+        
         n = 0
         st = time.perf_counter()
         max_workers = self.limit
@@ -694,7 +729,7 @@ class BiliWebApi:
             api = 'https://member.bilibili.com/x/vu/web/edit?csrf=' + self.__bili_jct
         return self._session.post(api, timeout=5,
                                    json=post_data).json()
-
+    
     def stop(self):
         self.stoped = True
 
@@ -723,6 +758,7 @@ class Data:
     no_reprint: int = 0
     is_only_self: int = 0
     charging_pay: int = 0
+    no_disturbance: int = 0
     extra_kwargs: dict = field(default_factory=dict)
 
     bvid: int = None
