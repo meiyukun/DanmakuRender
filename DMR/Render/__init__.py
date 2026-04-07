@@ -33,6 +33,8 @@ class Render():
         self._render_class = {}
         self.render_executors = ThreadPoolExecutor(max_workers=self.nrenders)
         self._lock = threading.Lock()
+        self._group_task_order = {}  # group_id -> [task_uuid, ...] 按提交顺序
+        self._completed_tasks = {}  # task_uuid -> (status, desc) 已完成待发送
 
     def load_failed_tasks(self):
         if exists(self.failed_tasks_file):
@@ -124,35 +126,59 @@ class Render():
                 'status': 'waiting',
             }
             self.render_tasks[task['uuid']] = task
+            group_id = video.group_id if (video := task.get('video')) else None
+            task['group_id'] = group_id
+            if group_id is not None:
+                self._group_task_order.setdefault(group_id, []).append(task['uuid'])
             self.render_executors.submit(self._render_subprocess, task)
+
+    def _send_task_result(self, task, status, desc=''):
+        """实际发送单个任务的结果"""
+        if status == 'error':
+            self.failed_tasks[task['uuid']] = task
+            self.save_failed_tasks()
+
+            self._pipeSend(
+                event='error',
+                msg=f"渲染视频{task['output']}时出现错误: {desc}",
+                target=task['source'],
+                request_id=task['request_id'],
+                dtype=str(type(desc)),
+                data=desc,
+            )
+        else:
+            self._pipeSend(
+                event='end',
+                msg=f"视频{task['output']}渲染完成",
+                target=task['source'],
+                request_id=task['request_id'],
+                dtype='dict',
+                data={
+                    'output': desc,
+                },
+            )
 
     def _gather(self, task, status, desc=''):
         with self._lock:
             self.render_tasks.pop(task['uuid'], None)
-            if status == 'error':
-                self.failed_tasks[task['uuid']] = task
-                self.save_failed_tasks()
+            group_id = task.get('group_id')
 
-                self._pipeSend(
-                    event='error',
-                    msg=f"渲染视频{task['output']}时出现错误: {desc}",
-                    target=task['source'],
-                    request_id=task['request_id'],
-                    dtype=str(type(desc)),
-                    data=desc,
-                )
-            else:
-                self._pipeSend(
-                    event='end',
-                    msg=f"视频{task['output']}渲染完成",
-                    target=task['source'],
-                    request_id=task['request_id'],
-                    dtype='dict',
-                    data={
-                        # 'config': task['config'],
-                        'output': desc,
-                    },
-                )
+            # 没有 group_id 的任务直接发送
+            if group_id is None or group_id not in self._group_task_order:
+                self._send_task_result(task, status, desc)
+                return
+
+            # 缓存完成结果，按组内顺序依次发送
+            self._completed_tasks[task['uuid']] = (task, status, desc)
+            order = self._group_task_order[group_id]
+            while order and order[0] in self._completed_tasks:
+                t_uuid = order.pop(0)
+                t, s, d = self._completed_tasks.pop(t_uuid)
+                self._send_task_result(t, s, d)
+
+            # 组内所有任务都已发送完毕，清理
+            if not order:
+                self._group_task_order.pop(group_id, None)
 
     def _render_subprocess(self, task):
         task['status'] = 'rendering'
