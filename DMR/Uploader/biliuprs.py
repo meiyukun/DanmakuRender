@@ -173,15 +173,17 @@ class biliuprs():
 
         if self.task_info.get('bvid') is None and out_bvid:
             # 首次上传，检查是否要添加到合集
-            section_id = config['section_id']
-            if section_id:
-                from DMR.Uploader.biliapi.bili_section import add_video_to_bilibili_section
-                if config['section_title']:
-                    title = replace_keywords(config['section_title'],video)
+            season_id = config['season_id']
+            if season_id:
+                if config['episode_title']:
+                    title = replace_keywords(config['episode_title'],video)
                 else:
                     title = config['title']
-                ret = add_video_to_bilibili_section(cookies=self.cookies, bvid=out_bvid, title=title, section_id=section_id )
-                self.logger.info("加入合集:%s:%s",section_id,ret)
+
+                section_title= replace_keywords(config['section_title'],video)
+                from DMR.Uploader.biliapi.bili_section import add_video_to_season
+                ret = add_video_to_season(cookie_file=self.cookies,season_id=season_id,bvid=out_bvid,section_name=section_title,episode_title=title)
+                self.logger.info("加入合集:%s:%s",season_id,ret)
 
 
         if out_bvid:

@@ -263,19 +263,22 @@ class BiliWebApi:
 
         # 加入合集
         if is_new :
-            section_id = kwargs.get('section_id', None)
-            section_title = self.videos.title
-            if kwargs['section_title']:
-                section_title = replace_keywords(kwargs['section_title'], files[0])
+            season_id = kwargs['season_id']
+            episode_title = self.videos.title
+            if kwargs['episode_title']:
+                episode_title = replace_keywords(kwargs['episode_title'], files[0])
 
-            if kwargs.get('epid') :#官方实现
+            if  season_id:#自己实现加入合集
+                section_title = replace_keywords(kwargs['section_title'], files[0])
+                logger.info("加入合集:%s:%s", season_id, ret)
+                from DMR.Uploader.biliapi.bili_section import add_video_to_season
+                ret = add_video_to_season(cookie_file=self.cookies_path, season_id=season_id, bvid=info,
+                                          section_name=section_title, episode_title=episode_title)
+                logger.info("加入合集:%s:%s", season_id, ret)
+            elif kwargs.get('epid'):#官方实现
                 epid = kwargs['epid']
-                self.add_episodes(epid, self.videos.bvid, section_title)
-            elif section_id:
-                from DMR.Uploader.biliapi.bili_section import add_video_to_bilibili_section
-                ret = add_video_to_bilibili_section(cookies=self.cookies_path, bvid=info, title=section_title,
-                                                    section_id=section_id, )
-                logger.info("加入合集:%s:%s", section_id, ret)
+                self.add_episodes(epid, self.videos.bvid, episode_title)
+
 
         # 还原insert_head
         self.insert_head = ori_insert_head

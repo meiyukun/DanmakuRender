@@ -210,7 +210,7 @@ def split_url(url: str):
     return platform, rid
 
 def replace_keywords(string:str, kw_info:dict=None, replace_invalid:bool=False):
-    if not kw_info:
+    if not kw_info or not string:
         return string
 
     class dict_wapper(edict):

@@ -361,7 +361,7 @@ render_args:
 # 上传器核心参数
 uploader_kernel_args:
   # 指定同时执行的上传任务数，默认1
-  nuploaders: 1
+  nuploaders: 3
 
 # 上传器默认参数
 upload_args:
@@ -427,6 +427,13 @@ upload_args:
     extra_upload_args: ~
     # 此参数只传入biliup-rs的append命令
     extra_append_args: ~
+
+  #    加入合集id
+    season_id: ~
+  #    小节标题
+    section_title: ~
+  #    小节中视频标题
+    episode_title: ~
 
     # 以下参数仅biliwebapi生效
     # 视频分P排序，默认False（按实际上传的时间排序），设置为True则按文件名称排序
