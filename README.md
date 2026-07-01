@@ -29,6 +29,43 @@
 - `--version` 查看版本号
 - `--skip_update` 跳过版本检查
 
+### 部署脚本
+项目根目录提供 `deploy.ps1`，用于一键推送本地 `v5` 分支到远端 `my:v5`，然后通过 SSH 登录一台或多台应用服务器，在指定项目目录执行更新。
+
+首次使用时复制示例配置：
+
+```powershell
+Copy-Item deploy.remote.example deploy.remote
+```
+
+编辑 `deploy.remote`，每行配置一台服务器：
+
+```text
+名称|SSH连接|服务器项目目录
+prod|root@192.168.1.1|/opt/DanmakuRender
+backup|root@192.168.1.2|/opt/DanmakuRender
+```
+
+`deploy.remote` 用于保存真实服务器连接信息，已加入 `.gitignore`，不会提交到 Git。
+
+常用命令：
+
+```powershell
+# 推送到 my:v5，并更新全部服务器
+.\deploy.ps1
+
+# 只更新指定服务器
+.\deploy.ps1 -Target prod
+
+# 更新多台指定服务器
+.\deploy.ps1 -Target "prod,backup"
+
+# 跳过本地 push，只执行服务器更新
+.\deploy.ps1 -SkipPush
+```
+
+服务器上的目标目录需要已经是本项目的 Git 仓库，并且可以访问远端 `my`。
+
 ## 更多
 感谢 THMonster/danmaku, wbt5/real-url, ForgQi/biliup, ForgQi/stream-gears 的工作。     
 出现问题欢迎大家提issue讨论。       

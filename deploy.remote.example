@@ -1,0 +1,9 @@
+# Format:
+# name|ssh_user_host|remote_project_dir
+#
+# Use deploy.ps1 -Target prod to update a single server.
+# Use deploy.ps1 -Target "prod,backup" to update multiple named servers.
+# Use deploy.ps1 to update all servers.
+#
+prod|root@192.168.1.1|/opt/DanmakuRender
+backup|root@192.168.1.2|/opt/DanmakuRender
