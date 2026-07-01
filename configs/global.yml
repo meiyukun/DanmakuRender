@@ -47,6 +47,8 @@ download_args:
     danmaku: True
     # 是否录制直播流
     video: True
+    # 是否转录音频为文字
+    transcribe: False
     # 延迟下播计时（分钟）
     # 使用这个功能可以把主播短暂下播又开播认定为同一场直播
     stop_wait_time: 120

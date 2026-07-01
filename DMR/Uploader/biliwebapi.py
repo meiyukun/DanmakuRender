@@ -777,8 +777,8 @@ class Data:
             self.tag = ','.join(self.tag)
 
     def delay_time(self, dtime: int):
-        """设置延时发布时间，距离提交大于2小时，格式为10位时间戳"""
-        if dtime - int(time.time()) > 7200:
+        """设置延时发布时间，距离提交大于2.5小时，格式为10位时间戳"""
+        if dtime - int(time.time()) > 9000:
             self.dtime = dtime
 
     def set_tag(self, tag: list):
