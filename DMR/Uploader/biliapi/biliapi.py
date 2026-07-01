@@ -1,9 +1,14 @@
 import json
-from time import sleep
+import threading
+import time
 
 import requests
 
 BASE_URL = "https://member.bilibili.com/x2/creative/web"
+WRITE_API_INTERVAL = 6
+
+_write_api_lock = threading.Lock()
+_last_write_api_time = 0.0
 
 
 def _make_headers(cookie: str, referer: str = "https://member.bilibili.com/platform/home") -> dict:
@@ -38,9 +43,21 @@ def _get(cookie: str, path: str, params: dict) -> dict:
     return resp.json()
 
 
+def _wait_for_write_api() -> None:
+    global _last_write_api_time
+
+    with _write_api_lock:
+        now = time.monotonic()
+        wait_time = WRITE_API_INTERVAL - (now - _last_write_api_time)
+        if wait_time > 0:
+            time.sleep(wait_time)
+        _last_write_api_time = time.monotonic()
+
+
 def _post_json(cookie: str, csrf: str, path: str, payload: dict) -> dict:
     headers = _make_headers(cookie)
     url = f"{BASE_URL}{path}?csrf={csrf}"
+    _wait_for_write_api()
     resp = requests.post(url, headers=headers, json=payload)
     resp.raise_for_status()
     return resp.json()
@@ -48,6 +65,7 @@ def _post_json(cookie: str, csrf: str, path: str, payload: dict) -> dict:
 
 def _post_form(cookie: str, path: str, data: dict) -> dict:
     headers = _make_form_headers(cookie)
+    _wait_for_write_api()
     resp = requests.post(f"{BASE_URL}{path}", headers=headers, data=data)
     resp.raise_for_status()
     return resp.json()
@@ -82,7 +100,6 @@ def add_section(cookie_file: str, season_id: int, title: str, section_type: int 
         "title": title,
         "captcha_token": "",
     }
-    sleep(5)
     return _post_json(cookie, csrf, "/season/section/add", payload)
 
 

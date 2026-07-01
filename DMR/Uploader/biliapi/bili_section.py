@@ -1,9 +1,43 @@
-import json
+import time
 
 from DMR.Uploader.biliapi.biliapi import add_episodes, get_season, add_section
 
+SEASON_ADD_RETRY_TIMES = 3
+SEASON_ADD_RETRY_INTERVAL = 10
+
 
 def add_video_to_season(
+        cookie_file: str,
+        season_id: int,
+        bvid: str,
+        section_name: str,
+        episode_title: str,
+) -> dict:
+    last_error = None
+
+    for retry_index in range(SEASON_ADD_RETRY_TIMES):
+        try:
+            return _add_video_to_season_once(
+                cookie_file=cookie_file,
+                season_id=season_id,
+                bvid=bvid,
+                section_name=section_name,
+                episode_title=episode_title,
+            )
+        except Exception as e:
+            last_error = e
+            if retry_index >= SEASON_ADD_RETRY_TIMES - 1:
+                break
+            time.sleep(SEASON_ADD_RETRY_INTERVAL * (retry_index + 1))
+
+    return {
+        "code": -1,
+        "message": f"添加视频到合集失败，已重试 {SEASON_ADD_RETRY_TIMES} 次",
+        "error": str(last_error),
+    }
+
+
+def _add_video_to_season_once(
         cookie_file: str,
         season_id: int,
         bvid: str,
@@ -25,17 +59,21 @@ def add_video_to_season(
             # 新建 section
             ret = add_section(cookie_file, season_id, section_name)
             if ret.get("code") != 0:
-                # 创建失败，回退到最后一个 section
-                target = max(sections, key=lambda s: s.get("order", 0))
-            else:
-                new_section_id = ret["data"]
-                return add_video_to_bilibili_section(
-                    cookies=cookie_file, bvid=bvid, title=episode_title, section_id=new_section_id,
-                )
+                raise RuntimeError(f"创建合集小节失败: {ret}")
+            new_section_id = ret["data"]
+            ret = add_video_to_bilibili_section(
+                cookies=cookie_file, bvid=bvid, title=episode_title, section_id=new_section_id,
+            )
+            if ret.get("code") != 0:
+                raise RuntimeError(f"添加视频到合集小节失败: {ret}")
+            return ret
 
-    return add_video_to_bilibili_section(
+    ret = add_video_to_bilibili_section(
         cookies=cookie_file, bvid=bvid, title=episode_title, section_id=target["id"],
     )
+    if ret.get("code") != 0:
+        raise RuntimeError(f"添加视频到合集小节失败: {ret}")
+    return ret
 
 
 def add_video_to_bilibili_section(
