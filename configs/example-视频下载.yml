@@ -9,6 +9,8 @@ common_event_args:
   auto_clean: False
   # 原视频自动转码
   auto_transcode: False
+  # 原视频自动语音转文字生成SRT字幕
+  auto_transcribe: False
 
 # 下载参数
 download_args:

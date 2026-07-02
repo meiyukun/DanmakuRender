@@ -16,6 +16,9 @@ dmr_engine_args:
   dynamic_config: True
   # 动态更新的配置文件路径
   dynamic_config_path: ./configs
+  # 配置文件路径
+  # 可设置为文件/文件夹列表
+  config_path: ./configs
 
 # 下载器核心参数
 downloader_kernel_args:
@@ -28,6 +31,9 @@ download_args:
     # 直播间链接
     # 请填写标准格式链接，例如：https://live.bilibili.com/123456
     url: 
+    # 是否使用同步上传功能（正在测试，目前只支持streamlink）
+    # 启用此功能必须使用实时上传，并使用biliwebapi上传引擎
+    sync: False
     # 录制程序引擎，可选ffmpeg, streamgears, pyrequests 或者 streamlink
     # 在使用streamgears作为录制引擎时不支持录制B站hls流
     # 建议PC推流的直播使用ffmpeg录制，手机推流的直播使用streamgears录制
@@ -68,6 +74,8 @@ download_args:
       # B站观看cookies，用于获取直播流，如果不填写则使用登录B站上传视频的cookies
       # 如果希望不登录录制最低画质，请设置为'None'
       bili_watch_cookies: .login_info/bili_watch_cookies.json
+      # 虎牙使用mobile api获取流(https://github.com/SmallPeaches/DanmakuRender/issues/490#issuecomment-3322342040)
+      huya_mobile_api: False
     # 高级视频录制参数
     # 请确保你明白这些参数的含义后再修改
     advanced_video_args: 
@@ -77,8 +85,22 @@ download_args:
       start_check_interval: 60
       # 下播检测间隔，在主播下播但是未超过延迟下播时间时使用
       stop_check_interval: 60
+      # 重启间隔时间，可设置为 [起始间隔，步长，最大间隔]
+      # 设置为数字将会是定值
+      restart_interval: [0, 10, 60]
+      # 视频文件名称最长长度，超过此长度的文件名称将会被裁剪，默认80（B站视频名称最大长度）
+      # 最大设置为256，否则文件无法被创建
+      max_fn_length: 80
+      # 视频文件最小大小（MB），小于此大小的视频文件将会被删除，默认1MB
+      # 此功能可用于删除因为录制错误导致的许多空视频文件
+      min_video_size: 1
+      # 视频文件最小录制时间（秒），小于此录制时间的视频文件将被删除，默认不启用
+      # 和最小大小配合使用时，只要有一个满足就会被删除
+      min_video_duration: ~
       # 录制组编号，可用于多任务协同，详情请参考文档
       group_id: ~
+      # 使用B站强制原画功能，仅适用于pyrequests引擎下的hls流
+      bili_force_origin: True
       # ffmpeg取流参数(仅ffmpeg下载引擎生效)
       ffmpeg_stream_args: [ '-rw_timeout','10000000',
                             '-analyzeduration','15000000',
@@ -88,10 +110,10 @@ download_args:
       ffmpeg_output_args: [ '-movflags','faststart+frag_keyframe+empty_moov']
       # 禁用下载速度慢时自动重启(仅ffmpeg下载引擎生效)
       disable_lowspeed_interrupt: false
+      # streamlink画质选项（默认best）
+      streamlink_quality: ~
       # streamlink 额外输入参数
       # 可用参数列表请参考 https://streamlink.github.io/cli.html
-      # 一个典型的使用方法是添加一个--twitch-api-header参数，用于取消twitch直播流的广告
-      # 特别提醒，使用此方法传入参数会在日志文件中明文显示，如果需要共享日志文件请确保删除了敏感信息！
       streamlink_extra_args: [
         "--twitch-disable-ads",     # 去广告，去掉、跳过嵌入的广告流
         "--twitch-disable-reruns",  # 如果该频道正在重放回放，不打开流
@@ -132,6 +154,10 @@ download_args:
       douyin_dm_cookies: ~
     # 弹幕过滤规则，满足其中任意条件的弹幕将被过滤
     dm_filter:
+      # 弹幕类型过滤，只获取指定类型的弹幕，支持情况请参考文档
+      # 可选值：all（所有）, danmaku（纯弹幕）, gift（礼物信息）, entry（进场信息）, superchat（超级弹幕）
+      # 默认只获取文字弹幕(danmaku)
+      dm_type: ~
       # 关键字过滤，只要有关键字的弹幕都会被过滤
       # 例如：[菜, fw]
       keywords: ~
@@ -140,8 +166,13 @@ download_args:
       username: ~
       # 最长弹幕长度，超过此长度的弹幕将被过滤，0表示不限制
       max_length: 0
-    # 弹幕模板
+    # 弹幕模板，具体使用请参考文档
     dm_template:
+      # 不同类型弹幕的模板
+      danmaku: ~
+      superchat: ~
+      gift: ~
+      entry: ~
       # ASS文本模板，使用方法请参考文档
       ass_text: ~
     # 高级弹幕录制参数
@@ -210,11 +241,64 @@ download_args:
     # 此参数将直接传入下载引擎，可以用来设置一些特殊的下载参数
     extra_args: []
 
+  # 虚拟下载
+  # 可以监控文件夹中的视频文件，用于和其他软件协同，详情请参考文档
+  virtual:
+    # 监控文件夹
+    input_dir: ~
+    # 输出文件夹
+    # 如果设置了输出文件夹，则视频会被复制到输出文件夹再处理
+    output_dir: ~
+    # 匹配视频文件的正则表达式
+    # 默认匹配可用视频文件
+    video_pattern: ~
+    # 匹配视频文件名称中视频信息
+    info_pattern:
+      # 匹配主播名称，默认为任务名称
+      name: ~
+      # 匹配视频标题，默认为视频文件名称
+      title: ~
+      # 匹配视频时间，默认为视频文件的创建时间
+      time_str: ~
+      # 匹配视频时间字符串转换为datetime对象的格式，用于datetime.strptime
+      # 必须与time_str同时使用
+      time_format:
+      # 是否匹配弹幕文件，仅支持同名的ass文件
+      danmaku: True
+    # 分段等待时间（分钟），如果视频在此时间内没有更新，则会被认为分段录制完成
+    segment_wait_time: 3
+    # 下播等待时间（分钟），如果没有视频在此时间内更新，则会被认为直播已经结束
+    stop_wait_time: 10
+    # 检测视频的起始时间，默认为当前时间
+    start_time: ~
+    # 高级视频参数
+    advanced_video_args: 
+      # 视频文件最小大小（MB），小于此大小的视频文件将会被忽略，默认1MB
+      min_video_size: 1
+      # 视频文件最小录制时间（秒），小于此录制时间的视频文件将被忽略，默认不启用
+      # 和最小大小配合使用时，只要有一个满足就会被忽略
+      # 此参数推荐不设置，因为虚拟下载中视频长度是由文件创建时间和修改时间计算得到的
+      # 在部分情况下中这两个时间相等，会导致计算得到的视频长度为0
+      min_video_duration: ~
+    # 额外信息，暂时没用
+    extra_info: ~
+
 # 渲染器核心参数
 render_kernel_args:
   # 指定同时执行的渲染任务数，默认1
   # 一般情况下此值不应该超过5（最好是不修改）
   nrenders: 1
+
+# 语音转录核心参数
+transcriber_kernel_args:
+  # 指定同时执行的转录任务数，默认1
+  ntranscribers: 1
+
+# 语音转录默认参数
+transcribe_args:
+  xm:
+    # 小米语音转录认证文件，JSON中需包含 authorization、device_id、app_id
+    auth_file: .login_info/xm-transcribe.json
 
 # 渲染器默认参数
 render_args:
@@ -241,6 +325,12 @@ render_args:
     output_resize: ~
     # 高级渲染参数
     # 请确保你明白这些参数的含义后再修改
+    # 渲染前后执行的命令
+    # 可以用来执行一些额外的操作，例如修改视频文件的元信息，是python中的命令
+    before_cmd: ~
+    after_cmd: ~
+    # 额外输入文件，用于合并多个视频文件，放在原视频-i之后
+    extra_inputs: ~
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
       # 注意设置filter_complex之后将会禁用fps等其他有关filter的选项
@@ -304,6 +394,11 @@ upload_args:
     # 实时上传（边录边传），每录制一个分段上传一次，同一场直播的不同分P仍然会在一个视频下，默认开启
     # 注意：实时上传可能无法上传很短的视频，尤其是在网速较快的情况下（B站对修改稿件的间隔有限制）
     realtime: True
+    # 是否合并视频
+    # 如果设置为True，那么会把所有分段视频合并成一个视频再上传，默认False
+    # 使用实时上传时此功能不生效
+    # 使用此功能请确保延迟下播时间设置较短，否则不同分辨率的视频合并会导致上传失败
+    concat_video: False
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 120
     # 以下参数来自biliuprs，详细内容可以参考 https://biliup.github.io/biliup-rs/index.html
@@ -342,6 +437,41 @@ upload_args:
     dolby: 0
     # 允许转载? 0-允许转载，1-禁止转载
     no_reprint: 1
+    # 额外参数列表（仅biliuprs生效）
+    # 此参数将直接传入biliup-rs
+    extra_args: ~
+    # 此参数只传入biliup-rs的upload命令
+    extra_upload_args: ~
+    # 此参数只传入biliup-rs的append命令
+    extra_append_args: ~
+  #    加入合集id
+    season_id: ~
+  #    小节标题
+    section_title: ~
+  #    小节中视频标题
+    episode_title: ~
+    # 以下参数仅biliwebapi生效
+    # 视频分P排序，默认False（按实际上传的时间排序），设置为True则按文件名称排序
+    sort_videos: False
+    # 是否将新的视频插入到列表头部，默认False。每次有新的分P视频时，会将其插入到列表头部，然后再进行后面的排序（如有）。
+    insert_head: False
+    # hires音频? 0-关闭 1-开启
+    hires: 0
+    # 仅自己可见? 0-否 1-是
+    is_only_self: 0
+    # 充电视频? 0-否 1-是
+    charging_pay: 0
+    # 开放字幕投稿?
+    open_subtitle: False
+    # 是否取消视频推送动态（一般配合加入合集使用）? 0-不取消 1-取消
+    no_disturbance: 0
+    # 加入合集ID
+    epid: ~
+    # 简介中的at信息，设置方法请参考biliup
+    credits: ~
+    # 额外请求参数（此功能暂不生效）
+    # 此参数将直接作为上传请求提交的参数
+    extra_kwargs: {}
     # 是否开启充电? 0-关闭 1-开启
     open_elec: 1
   
@@ -417,6 +547,8 @@ upload_args:
     retry: 3
     # 上传超时时间（秒），如果上传时间超过这个时间将会被强制终止（用于防止卡死），0表示不限制
     timeout: 0
+    # 实时上传，自定义时必须启用
+    realtime: True
     # 上传的视频最短长度，小于此长度的视频会被自动过滤，默认120s
     min_length: 120
     # 上传命令行参数，可以使用关键字替换
@@ -466,5 +598,17 @@ clean_args:
     w_srcfile: False
     w_srcpre: True
 
+# WebUI参数
 webservice_kernel_args:
+  # 启用 Web API
   web_api: True
+  # 服务端口
+  port: 5000
+  # 绑定地址
+  host: '0.0.0.0'
+  # 是否强制登录
+  force_login: True
+  # 管理员用户名
+  username: 'admin'
+  # 管理员密码
+  password: 'admin'

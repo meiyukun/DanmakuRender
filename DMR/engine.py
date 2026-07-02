@@ -5,6 +5,7 @@ import threading
 from .Cleaner import Cleaner
 from .Downloader import Downloader
 from .Render import Render
+from .Transcriber import Transcriber
 from .Uploader import Uploader
 from .Task import ReplayTask
 from .WebService import WebService
@@ -34,6 +35,11 @@ class DMREngine():
             self.plugin_dict['render']['send_queue'].put(message)
         elif target == 'uploader':
             self.plugin_dict['uploader']['send_queue'].put(message)
+        elif target == 'transcriber':
+            if 'transcriber' not in self.plugin_dict:
+                self.logger.error('Transcriber plugin is not enabled.')
+                return
+            self.plugin_dict['transcriber']['send_queue'].put(message)
         elif target == 'cleaner':
             self.plugin_dict['cleaner']['send_queue'].put(message)
         elif target == 'downloader':
@@ -85,6 +91,8 @@ class DMREngine():
             plugin = Render((self.recv_queue, send_queue), **config)
         elif name == 'uploader':
             plugin = Uploader((self.recv_queue, send_queue), **config)
+        elif name == 'transcriber':
+            plugin = Transcriber((self.recv_queue, send_queue), **config)
         elif name == 'cleaner':
             plugin = Cleaner((self.recv_queue, send_queue), **config)
         elif name == 'downloader':

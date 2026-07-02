@@ -79,6 +79,11 @@ class Config():
                 if _replay_config.get('render_args'):
                     replay_config['render_args'] = merge_dict(replay_config['render_args'], _replay_config['render_args'])
 
+            if common_args.get('auto_transcribe'):
+                replay_config['transcribe_args'] = deepcopy(self.global_config['transcribe_args'])
+                if _replay_config.get('transcribe_args'):
+                    replay_config['transcribe_args'] = merge_dict(replay_config['transcribe_args'], _replay_config['transcribe_args'])
+
             if common_args.get('auto_upload'):
                 global_upload_args = self.global_config['upload_args']
                 replay_config['upload_args'] = {}

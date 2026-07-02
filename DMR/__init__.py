@@ -34,6 +34,8 @@ class DanmakuRender():
 
         for taskname in self.config.get_replaytasks():
             replay_config = self.config.get_replay_config(taskname)
+            if replay_config.get('common_event_args', {}).get('auto_transcribe') and 'transcriber' not in plugin_enabled:
+                self.logger.error(f'任务 {taskname} 已启用 auto_transcribe，但 dmr_engine_args.enabled_plugins 未启用 transcriber 插件。')
             self.engine.add_task(taskname, replay_config)
 
         threading.Thread(target=self._monintor, daemon=True).start()

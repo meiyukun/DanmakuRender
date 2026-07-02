@@ -21,6 +21,8 @@ class LiveEvents(BaseEvents):
             'downloader/livestop': self.onLiveEnd,
             'render/end': self.onRenderEnd,
             'render/error': self.defaultEvent,
+            'transcriber/end': self.defaultEvent,
+            'transcriber/error': self.defaultEvent,
             'uploader/end': self.onUploadEnd,
             'uploader/error': self.defaultEvent,
             'cleaner/end': self.defaultEvent,
@@ -58,6 +60,23 @@ class LiveEvents(BaseEvents):
             self.state_dict[video.group_id] = [video_state]
 
         ret_msgs = []
+        if self.config['common_event_args'].get('auto_transcribe'):
+            if video.path and os.path.exists(video.path):
+                transcribe_msg = PipeMessage(
+                    source=self.name,
+                    target='transcriber',
+                    event='newtask',
+                    request_id=uuid(),
+                    data={
+                        'taskname': self.name,
+                        'video': video,
+                        'args': self.config['transcribe_args']['xm'],
+                    }
+                )
+                ret_msgs.append(transcribe_msg)
+            else:
+                self.logger.info(f'{self.name}: 视频 {video.path} 不是本地文件，跳过语音转录.')
+
         if self.config['common_event_args'].get('auto_transcode'):
             transcode_args = self.config['render_args']['transcode']
             if transcode_args.get('output_name'):

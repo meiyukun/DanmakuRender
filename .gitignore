@@ -8,7 +8,9 @@
 
 *.7z
 replay-**.yml
-DMR-**.yml
+/configs/*
+!/configs/global.yml
+!/configs/example*
 **.exe
 **.pyc
 **.mp4
