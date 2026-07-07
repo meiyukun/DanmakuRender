@@ -97,7 +97,7 @@ class Config():
                             if not global_upload_args.get(target):
                                 raise ValueError(f'不存在可用的上传目标 {target}.')
                             upload_config = deepcopy(global_upload_args[target])
-                            upload_config.update(upload_arg)
+                            upload_config = merge_dict(upload_config, upload_arg)
                             replay_config['upload_args'][upload_file_types].append(upload_config)
 
             if common_args.get('auto_clean'):
@@ -115,7 +115,7 @@ class Config():
                             if not global_clean_args.get(method):
                                 raise ValueError(f'不存在可用的清理方法 {method}.')
                             clean_config = deepcopy(global_clean_args[method])
-                            clean_config.update(clean_arg)
+                            clean_config = merge_dict(clean_config, clean_arg)
                             replay_config['clean_args'][clean_file_types].append(clean_config)
 
             self.replay_config[taskname] = deepcopy(replay_config)
