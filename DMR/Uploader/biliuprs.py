@@ -191,10 +191,13 @@ class biliuprs():
         else:
             return False, log
 
-    def format_config(self, config, video_info=None, replace_invalid=False):
+    def format_config(self, config, video_info=None, files=None, replace_invalid=False):
         config = copy.deepcopy(config)
+        raw_cover_auto = copy.deepcopy(config.get('cover_auto')) if config.get('cover_auto') else None
         from DMR.utils.utils import replace_keywords_all
         replace_keywords_all(config,video_info)
+        if raw_cover_auto is not None:
+            config['cover_auto'] = raw_cover_auto
 
         if config.get('title'):
             config['title'] = replace_keywords(config['title'], video_info, replace_invalid=replace_invalid)
@@ -227,12 +230,13 @@ class biliuprs():
                     self.logger.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
                     config['cover'] = ''
         if not self.task_info.get('bvid') and config.get('cover_auto'):
-            fix_cover(config,video_info)
+            fix_cover(config, files or video_info)
         return config
 
     def upload(self, files:list[VideoInfo], **kwargs):
         if not isinstance(files, list):
             files = [files]
+        cover_files = list(files)
         # 合并视频
         if len(files) > 1 and not kwargs['realtime'] and kwargs['concat_video']:
             old_name, old_ext = os.path.splitext(os.path.basename(files[0].path))
@@ -246,7 +250,7 @@ class biliuprs():
             except:
                 self.logger.warning(f'biliuprs: 合并失败，将分段上传：{files}')
 
-        config = self.format_config(kwargs, files[0])
+        config = self.format_config(kwargs, files[0], files=cover_files if not kwargs.get('realtime') else files)
 
         # 延迟按第一个视频的开始时间来算
         dtime = config['dtime']

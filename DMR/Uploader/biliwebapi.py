@@ -229,7 +229,7 @@ class BiliWebApi:
             # 自动创建封面
             if kwargs.get('cover_auto'):
                 from DMR.Uploader.cover.cover_main import fix_cover
-                fix_cover(kwargs, files[0])
+                fix_cover(kwargs, files)
                 cover = kwargs.get('cover')
                 if cover:
                     self.videos.cover =self.cover_up(cover)

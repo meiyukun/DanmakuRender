@@ -24,7 +24,7 @@ RUN apt-get install -y python3.9 python3.9-distutils python3.9-dev
 
 
 # 安装 pip
-RUN wget https://bootstrap.pypa.io/get-pip.py && \
+RUN wget https://bootstrap.pypa.io/pip/3.9/get-pip.py && \
     python3.9 get-pip.py && \
     rm get-pip.py
 

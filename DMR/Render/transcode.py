@@ -85,7 +85,7 @@ class Transcoder(BaseRender):
             output_info.file_id = uuid()
             output_info.size = os.path.getsize(output)
             output_info.ctime = start_time
-            output_info.dm_file_id = None
+            output_info.dm_file_id = video.dm_file_id
             output_info.src_video_id = video.file_id
             return status, output_info
         else:
