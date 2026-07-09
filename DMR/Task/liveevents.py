@@ -1,5 +1,7 @@
 import logging
 import os
+import json
+import hashlib
 from .baseevents import BaseEvents
 from ..utils import *
 
@@ -9,6 +11,45 @@ class LiveEvents(BaseEvents):
         self.state_dict = {}
         self.ended_dict = {}
         self.logger = logging.getLogger(__name__)
+        state_id = hashlib.sha256(name.encode('utf-8')).hexdigest()
+        self.state_file = os.path.join('.temp', 'replay_states', f'{state_id}.json')
+        self._load_state()
+
+    def _load_state(self):
+        if not os.path.exists(self.state_file):
+            return
+        try:
+            with open(self.state_file, 'r', encoding='utf-8') as f:
+                state = json.load(f, cls=DateTimeDecoder)
+            self.state_dict = state.get('state_dict', {})
+            self.ended_dict = state.get('ended_dict', {})
+            for video_states in self.state_dict.values():
+                for video_state in video_states:
+                    for info in video_state.values():
+                        if isinstance(info.get('file'), dict):
+                            info['file'] = video_info_from_dict(info['file'])
+            self.logger.warning(
+                f'{self.name}: 已恢复 {len(self.state_dict)} 个未完成视频组的流水线状态.'
+            )
+        except Exception as e:
+            self.logger.error(f'{self.name}: 恢复流水线状态失败: {e}')
+            self.logger.exception(e)
+            self.state_dict = {}
+            self.ended_dict = {}
+
+    def _save_state(self):
+        try:
+            if not self.state_dict:
+                if os.path.exists(self.state_file):
+                    os.remove(self.state_file)
+                return
+            atomic_json_dump({
+                'taskname': self.name,
+                'state_dict': self.state_dict,
+                'ended_dict': self.ended_dict,
+            }, self.state_file)
+        except Exception as e:
+            self.logger.error(f'{self.name}: 保存流水线状态失败: {e}')
 
     @property
     def event_dict(self):
@@ -142,7 +183,7 @@ class LiveEvents(BaseEvents):
 
         if self.config['common_event_args'].get('auto_upload'):
             ret_msgs += self._check_for_upload(video.group_id, len(self.state_dict[video.group_id])-1)
-                
+        self._save_state()
         return ret_msgs
     
     def onLiveEnd(self, message:PipeMessage):
@@ -162,7 +203,7 @@ class LiveEvents(BaseEvents):
             ret_msgs += upload_msgs
 
         self._free_state_memory()
-        
+        self._save_state()
         return ret_msgs
     
     def _check_for_upload(self, group_id:str, _idx:int=None):
@@ -257,6 +298,11 @@ class LiveEvents(BaseEvents):
         self.logger.info(f'{self.name}: {message.msg}.')
         request_id = message.request_id
         video:VideoInfo = message.data.get('output')
+        if not video or video.group_id not in self.state_dict:
+            self.logger.error(
+                f'{self.name}: 渲染任务已完成，但找不到视频组流水线状态，无法继续自动上传.'
+            )
+            return
         video_states = self.state_dict[video.group_id]
         # 将状态信息中request_id对应的等待移除
         for idx, video_state in enumerate(video_states):
@@ -271,7 +317,7 @@ class LiveEvents(BaseEvents):
         if self.config['common_event_args'].get('auto_upload'):
             upload_msgs = self._check_for_upload(video.group_id)
             ret_msgs += upload_msgs
-
+        self._save_state()
         return ret_msgs
     
     def _check_for_clean(self, group_id=None):
@@ -356,13 +402,14 @@ class LiveEvents(BaseEvents):
         if self.config['common_event_args'].get('auto_clean'):
             clean_msgs = self._check_for_clean()
             ret_msgs += clean_msgs
-        
+        self._free_state_memory()
+        self._save_state()
         return ret_msgs
 
     def onExit(self, *args, **kwargs) -> None:
         self.logger.info(f'{self.name}: 任务结束.')
-        self.state_dict.clear()
-        self.ended_dict.clear()
+        # Keep unfinished state across both graceful and unexpected restarts.
+        self._save_state()
         return PipeMessage(
             source=self.name,
             target='downloader',

@@ -47,6 +47,7 @@
                     <th>视频</th>
                     <th>输出</th>
                     <th>模式</th>
+                    <th>状态/原因</th>
                     <th>操作</th>
                 </tr>
             </thead>
@@ -56,6 +57,7 @@
                     <td>{{ task.video }}</td>
                     <td>{{ task.output }}</td>
                     <td>{{ task.mode }}</td>
+                    <td>{{ task.status }}{% if task.failure_reason %}：{{ task.failure_reason }}{% endif %}</td>
                     <td>
                         <button onclick="retryRenderTask('{{ task.uuid }}')">重试</button>
                         <button onclick="deleteRenderTask('{{ task.uuid }}')" style="background-color: #dc3545;">删除</button>
@@ -119,6 +121,7 @@
                 <tr>
                     <th>文件</th>
                     <th>上传至</th>
+                    <th>状态/原因</th>
                     <th>操作</th>
                 </tr>
             </thead>
@@ -131,6 +134,7 @@
                         {% endfor %}
                     </td>
                     <td>{{ task.account }} ({{ task.engine }})</td>
+                    <td>{{ task.status }}{% if task.failure_reason %}：{{ task.failure_reason }}{% endif %}</td>
                     <td>
                         <button onclick="retryTask('{{ task.uuid }}')">重试</button>
                         <button onclick="deleteTask('{{ task.uuid }}')" style="background-color: #dc3545;">删除</button>
@@ -243,12 +247,13 @@
                 // Refresh Failed Renders
                 const failedRenderDiv = document.getElementById('failed-renders');
                 if (data.failed_renders && data.failed_renders.length > 0) {
-                    let html = '<table><thead><tr><th>视频</th><th>输出</th><th>模式</th><th>操作</th></tr></thead><tbody>';
+                    let html = '<table><thead><tr><th>视频</th><th>输出</th><th>模式</th><th>状态/原因</th><th>操作</th></tr></thead><tbody>';
                     data.failed_renders.forEach(task => {
                         html += `<tr>
                             <td>${task.video}</td>
                             <td>${task.output}</td>
                             <td>${task.mode}</td>
+                            <td>${task.status}${task.failure_reason ? '：' + task.failure_reason : ''}</td>
                             <td>
                                 <button onclick="retryRenderTask('${task.uuid}')">重试</button>
                                 <button onclick="deleteRenderTask('${task.uuid}')" style="background-color: #dc3545;">删除</button>
@@ -293,7 +298,7 @@
                 // Refresh Failed Tasks
                 const failedDiv = document.getElementById('failed-tasks');
                 if (data.failed_tasks && data.failed_tasks.length > 0) {
-                    let html = '<table><thead><tr><th>文件</th><th>上传至</th><th>操作</th></tr></thead><tbody>';
+                    let html = '<table><thead><tr><th>文件</th><th>上传至</th><th>状态/原因</th><th>操作</th></tr></thead><tbody>';
                     data.failed_tasks.forEach(task => {
                         let filesHtml = '';
                         task.files.forEach(f => {
@@ -302,6 +307,7 @@
                         html += `<tr>
                             <td>${filesHtml}</td>
                             <td>${task.account} (${task.engine})</td>
+                            <td>${task.status}${task.failure_reason ? '：' + task.failure_reason : ''}</td>
                             <td>
                                 <button onclick="retryTask('${task.uuid}')">重试</button>
                                 <button onclick="deleteTask('${task.uuid}')" style="background-color: #dc3545;">删除</button>

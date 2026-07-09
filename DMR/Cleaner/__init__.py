@@ -2,6 +2,8 @@ import logging
 import os
 import queue
 import threading
+import json
+import time
 
 from concurrent.futures import ThreadPoolExecutor
 from os.path import exists, isdir, isfile, abspath, dirname
@@ -23,6 +25,45 @@ class Cleaner():
         self._piperecvprocess = None
         self.clean_executors = ThreadPoolExecutor(max_workers=1)
         self._lock = threading.Lock()
+        self.clean_tasks = {}
+        self.active_tasks_file = '.temp/active_cleans.json'
+        self._load_interrupted_tasks()
+
+    def _load_interrupted_tasks(self):
+        if not exists(self.active_tasks_file):
+            return
+        try:
+            with open(self.active_tasks_file, 'r', encoding='utf-8') as f:
+                data = json.load(f, cls=DateTimeDecoder)
+            for task_uuid, task in data.items():
+                task['files'] = [
+                    video_info_from_dict(file_info)
+                    for file_info in task.get('files', [])
+                ]
+                task['status'] = 'interrupted'
+                self.clean_tasks[task_uuid] = task
+            if data:
+                self.logger.warning(f'已恢复 {len(data)} 个中断的清理任务.')
+        except Exception as e:
+            self.logger.error(f'恢复清理任务失败: {e}')
+
+    def _save_active_tasks(self):
+        try:
+            atomic_json_dump(self.clean_tasks, self.active_tasks_file)
+        except Exception as e:
+            self.logger.error(f'保存清理任务失败: {e}')
+
+    def _schedule_task(self, task):
+        delay = max(0, task.get('run_at', time.time()) - time.time())
+        if delay > 0:
+            timer = threading.Timer(
+                delay, self.clean_executors.submit,
+                args=(self._clean_subprocess, task),
+            )
+            timer.daemon = True
+            timer.start()
+        else:
+            self.clean_executors.submit(self._clean_subprocess, task)
     
     def _pipeSend(self, event, msg, target='engine', request_id=None, dtype=None, data=None, **kwargs):
         if self.send_queue:
@@ -53,9 +94,19 @@ class Cleaner():
         self.stoped = False
         self._piperecvprocess = threading.Thread(target=self._pipeRecvMonitor, daemon=True)
         self._piperecvprocess.start()
+        with self._lock:
+            for task in self.clean_tasks.values():
+                self._schedule_task(task)
 
     def add_task(self, msg:PipeMessage):
         with self._lock:
+            for task in self.clean_tasks.values():
+                if msg.request_id and task.get('request_id') == msg.request_id:
+                    self._pipeSend(
+                        'accepted', '清理任务已存在', target=msg.source,
+                        request_id=msg.request_id,
+                    )
+                    return
             config = msg.data
             method = config.get('method')
             if not method: return 
@@ -67,13 +118,21 @@ class Cleaner():
                 'args': config.get('args', {}),
                 'files': config.get('files'),
                 'config': config,
+                'run_at': time.time() + config.get('delay', 0),
+                'status': 'waiting',
             }
-            if config.get('delay', 0) > 0:
-                threading.Timer(config.get('delay'), self.clean_executors.submit, args=(self._clean_subprocess, task)).start()
-            else:
-                self.clean_executors.submit(self._clean_subprocess, task)
+            self.clean_tasks[task['uuid']] = task
+            self._save_active_tasks()
+            self._pipeSend(
+                'accepted', '清理任务已持久化', target=msg.source,
+                request_id=msg.request_id,
+            )
+            self._schedule_task(task)
 
     def _clean_subprocess(self, task):
+        with self._lock:
+            task['status'] = 'cleaning'
+            self._save_active_tasks()
         try:
             method = task['method']
             clean_args = task['args']
@@ -119,9 +178,19 @@ class Cleaner():
                             raise RuntimeError(f'命令执行失败: {cmds}')
                 
             self._pipeSend('end', f'清理完成：{method} {cleaned_files} -> {dst}.', target=task['source'], request_id=task['request_id'])
+            with self._lock:
+                self.clean_tasks.pop(task['uuid'], None)
+                self._save_active_tasks()
         except Exception as e:
             self.logger.exception(e)
+            with self._lock:
+                task['status'] = 'failed'
+                task['failure_reason'] = str(e)
+                self._save_active_tasks()
             self._pipeSend('error', f'清理错误 {e}.', target=task['source'], request_id=task['request_id'], dtype='Exception', data=e)
             
     def stop(self):
         self.stoped = True
+        with self._lock:
+            self._save_active_tasks()
+        self.clean_executors.shutdown(wait=False)

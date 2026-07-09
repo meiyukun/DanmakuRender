@@ -2,6 +2,7 @@ import html
 import random
 import subprocess
 import json
+import tempfile
 import time
 import re
 import os
@@ -37,6 +38,8 @@ __all__ = [
     'filename_to_taskname',
     'DateTimeEncoder',
     'DateTimeDecoder',
+    'atomic_json_dump',
+    'video_info_from_dict',
 ]
 
 
@@ -48,16 +51,66 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 class DateTimeDecoder(json.JSONDecoder):
+    DATETIME_KEYS = {'ctime', 'stream_start_time'}
+
     def __init__(self, *args, **kwargs):
         super().__init__(object_hook=self.object_hook, *args, **kwargs)
     
     def object_hook(self, obj):
-        if isinstance(obj, str):
+        for key, value in obj.items():
+            if key in self.DATETIME_KEYS:
+                obj[key] = self._decode_value(value)
+        return obj
+
+    @classmethod
+    def _decode_value(cls, value):
+        if isinstance(value, str):
             try:
-                return datetime.fromisoformat(obj)
+                return datetime.fromisoformat(value)
             except ValueError:
                 pass
-        return obj
+        return value
+
+
+def atomic_json_dump(data, path):
+    """Write JSON without leaving a truncated state file after a crash."""
+    def strip_runtime_values(value):
+        if isinstance(value, dict):
+            return {
+                key: None if key == 'stream_queue' else strip_runtime_values(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [strip_runtime_values(item) for item in value]
+        return value
+
+    data = strip_runtime_values(data)
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='.dmr-', suffix='.tmp', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, cls=DateTimeEncoder, ensure_ascii=False, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def video_info_from_dict(data):
+    """Restore VideoInfo and its nested StreamerInfo from persisted JSON."""
+    if not isinstance(data, dict):
+        return data
+    from .dataclass import StreamerInfo, VideoInfo
+    restored = dict(data)
+    if isinstance(restored.get('streamer'), dict):
+        restored['streamer'] = StreamerInfo(**restored['streamer'])
+    return VideoInfo(**restored)
 
 
 def filename_to_taskname(filename:str) -> str:

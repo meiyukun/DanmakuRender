@@ -232,7 +232,10 @@ class WebApi:
                     if uploader.retry_task(uuid):
                         return {'status': 'success', 'message': 'Task retry scheduled.'}
                     else:
-                        return {'status': 'error', 'message': 'Task not found or failed to retry.'}
+                        return {
+                            'status': 'error',
+                            'message': uploader.last_retry_error or 'Task not found or failed to retry.',
+                        }
             return {'status': 'error', 'message': 'Uploader not available.'}
 
         @app.route('/api/failed_uploads/delete/<uuid>', methods=['POST'])
@@ -256,7 +259,10 @@ class WebApi:
                     if render.retry_task(uuid):
                         return {'status': 'success', 'message': 'Task retry scheduled.'}
                     else:
-                        return {'status': 'error', 'message': 'Task not found or failed to retry.'}
+                        return {
+                            'status': 'error',
+                            'message': render.last_retry_error or 'Task not found or failed to retry.',
+                        }
             return {'status': 'error', 'message': 'Render not available.'}
 
         @app.route('/api/failed_renders/delete/<uuid>', methods=['POST'])
@@ -319,6 +325,8 @@ class WebApi:
                         'account': task.get('args', {}).get('account', 'Unknown'),
                         'engine': task.get('engine', 'Unknown'),
                         'command': task.get('command'),
+                        'status': task.get('status', 'failed'),
+                        'failure_reason': task.get('failure_reason', ''),
                     })
 
         # Get Render Tasks
@@ -343,6 +351,8 @@ class WebApi:
                         'video': os.path.basename(video_path),
                         'output': os.path.basename(task.get('output', 'Unknown')),
                         'mode': task.get('mode', 'Unknown'),
+                        'status': task.get('status', 'failed'),
+                        'failure_reason': task.get('failure_reason', ''),
                     })
         
         return {
