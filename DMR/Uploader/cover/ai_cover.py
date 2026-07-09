@@ -22,8 +22,10 @@ DEFAULT_PROMPT = """为B站视频生成一张高点击率完整封面。
 视频标题：{TITLE}
 主播：{STREAMER.NAME}
 弹幕内容分析：{DANMAKU_SUMMARY}
+高价值热点片段：{HOT_SEGMENTS}
 热点弹幕：{HOT_DANMAKU}
 关键词：{HOT_KEYWORDS}
+高频表情：{HOT_EMOJIS}
 
 要求：画面醒目、清晰、有强烈视觉中心，贴近本次录屏/直播回放的节目内容；包含适合封面的中文标题排版；不要使用真实平台Logo，不要生成二维码。"""
 
@@ -88,6 +90,29 @@ def _format_list(items, key="text", limit=8):
     return "、".join([x for x in values if x])
 
 
+def _format_hot_segments(items, limit=3):
+    values = []
+    for item in (items or [])[:limit]:
+        if not isinstance(item, dict):
+            values.append(str(item))
+            continue
+        keywords = "、".join(
+            keyword.get("text", "")
+            for keyword in item.get("keywords", [])[:4]
+            if isinstance(keyword, dict)
+        )
+        representative = "；".join(item.get("representative_texts", [])[:2])
+        parts = [
+            item.get("period", ""),
+            item.get("label", ""),
+            f"强度{item.get('score')}" if item.get("score") is not None else "",
+            f"关键词:{keywords}" if keywords else "",
+            f"代表弹幕:{representative}" if representative else "",
+        ]
+        values.append(" ".join(str(part) for part in parts if part))
+    return " | ".join(values)
+
+
 def _clean_text_ai_prompt(content):
     content = (content or "").strip()
     if content.startswith("```"):
@@ -122,6 +147,8 @@ def _build_prompt_context(video_info, danmaku_analysis=None):
         "danmaku_local_summary": local_summary,
         "hot_danmaku": _format_list(danmaku_analysis.get("hot_danmaku", [])),
         "hot_keywords": _format_list(danmaku_analysis.get("hot_keywords", [])),
+        "hot_emojis": _format_list(danmaku_analysis.get("hot_emojis", [])),
+        "hot_segments": _format_hot_segments(danmaku_analysis.get("hot_segments", [])),
         "peak_periods": _format_list(danmaku_analysis.get("peak_periods", []), key="period", limit=3),
         "main_topics": "",
         "visual_prompt_hints": "",
@@ -264,6 +291,21 @@ def _reference_frame_second(ai_config, video_info, danmaku_analysis):
     duration = _get_video_duration(video_info)
     source = ref_config.get("source", "peak_danmaku")
     if source == "peak_danmaku":
+        for item in (danmaku_analysis or {}).get("hot_segments", []):
+            if not isinstance(item, dict):
+                continue
+            second = item.get("peak_second")
+            if second is None:
+                second = item.get("start")
+            try:
+                second = float(second)
+            except (TypeError, ValueError):
+                continue
+            offset = float(ref_config.get("peak_offset_seconds", 0) or 0)
+            second += offset
+            if duration:
+                return min(max(0.0, second), max(0.0, duration - 1))
+            return max(0.0, second)
         for item in (danmaku_analysis or {}).get("peak_periods", []):
             second = _parse_period_start(item.get("period") if isinstance(item, dict) else item)
             if second is not None:
