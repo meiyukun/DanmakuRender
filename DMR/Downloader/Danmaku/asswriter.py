@@ -60,6 +60,10 @@ class AssWriter():
             float(self.repeat_danmaku.get('hot_font_scale', 1.35)),
             1.0,
         )
+        self.repeat_hot_count_font_scale = min(
+            max(float(self.repeat_danmaku.get('hot_count_font_scale', 0.78)), 0.1),
+            1.0,
+        )
         self.repeat_hot_line_spacing = max(
             float(self.repeat_danmaku.get('hot_line_spacing', 1.25)),
             1.0,
@@ -89,6 +93,7 @@ class AssWriter():
         self._super_chat_state = 0
         self._latest_end_time = 0
         self._hot_fontsize = max(int(self.fontsize * self.repeat_hot_font_scale), self.fontsize)
+        self._hot_count_fontsize = max(int(round(self._hot_fontsize * self.repeat_hot_count_font_scale)), 1)
         self._ntracks = max(
             int(((self.height - self.dst) * self.dmrate) / (self.fontsize + self.margin_h)),
             1,
@@ -336,8 +341,9 @@ class AssWriter():
                 t0 = '%02d:%02d:%05.2f' % sec2hms(start)
                 t1 = '%02d:%02d:%05.2f' % sec2hms(end)
                 content = (
-                    f"{segment['text']} ×{segment['count']} "
-                    f"{self.repeat_hot_suffix}"
+                    f"{segment['text']}"
+                    f"{{\\fs{self._hot_count_fontsize}}} ×{segment['count']}"
+                    f" {self.repeat_hot_suffix}"
                 )
                 effect = ''
                 # 仅在该热点自身的计数更新时触发；其他热点造成的时间切片不重复触发。

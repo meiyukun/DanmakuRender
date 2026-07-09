@@ -167,6 +167,8 @@ download_args:
       hot_color: ff0000
       # 固定热点字号倍率；1.35表示普通弹幕字号的135%
       hot_font_scale: 1.35
+      # 热点计数“×N”和后缀emoji的字号倍率，相对热点正文计算；0.78表示比正文略小
+      hot_count_font_scale: 0.78
       # 多热点行距倍率，以热点字号为基准；若文字或emoji仍有重叠可继续调大
       hot_line_spacing: 1.25
       # 多个热点会垂直排列，热点组的中心与普通滚动弹幕区域的中心对齐
