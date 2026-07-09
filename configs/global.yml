@@ -147,6 +147,44 @@ download_args:
     outlinecolor: 000000
     # 弹幕描边宽度
     outlinesize: 1.0
+    # 短时间重复弹幕分级样式：相同内容连续出现时，按累计次数改变颜色并升级为固定热点
+    # 连续重复字符及短符号反应会自动归并，例如“？”与“？？？”、“😂”与“😂😂”
+    # 普通句子不会仅因包含相同符号或文字而合并
+    # 以下参数可以在单个 DMR-*.yml 任务的 download_args 中覆盖
+    repeat_danmaku:
+      # 是否启用；关闭后所有弹幕仍按原有样式滚动
+      enabled: True
+      # 会话超时（秒）：相同内容超过该时间未再次出现，则结束本轮并从1重新计数
+      # 弹幕文件分段时也会结束当前会话
+      session_timeout: 8
+      # 累计达到该条数时开始使用 color 滚动；6表示第6条起变色
+      color_threshold: 4
+      # 累计达到该条数时改为固定热点；必须不小于 color_threshold
+      hot_threshold: 8
+      # 强调阶段颜色，6位RGB十六进制颜色码，不要包含#号
+      color: ff9900
+      # 固定热点颜色，6位RGB十六进制颜色码，不要包含#号
+      hot_color: ff0000
+      # 固定热点字号倍率；1.35表示普通弹幕字号的135%
+      hot_font_scale: 1.35
+      # 多热点行距倍率，以热点字号为基准；若文字或emoji仍有重叠可继续调大
+      hot_line_spacing: 1.25
+      # 多个热点会垂直排列，热点组的中心与普通滚动弹幕区域的中心对齐
+      # 热点不会占用或缩减普通弹幕轨道
+      # 热点计数后缀，最终显示效果例如“太强了 ×10 🔥”
+      hot_suffix: 🔥
+      # 热点首次出现及“×N”计数变化时播放的强调特效
+      hot_update_effect:
+        # 是否启用缩放脉冲和描边光晕；关闭后热点只更新文字
+        enabled: True
+        # 特效持续时间（秒），建议设置为0.2-0.4
+        duration: 0.25
+        # 初始缩放倍率，随后恢复原大小；1.25表示从125%缩回100%
+        pulse_scale: 1.25
+        # 初始光晕描边宽度，随后恢复为普通 outlinesize
+        glow_size: 4
+        # 初始光晕模糊强度，随后恢复为0
+        glow_blur: 3
     # 弹幕流选项
     dm_stream_option:
       # 用于获取抖音弹幕流的cookies，用于特殊情况下录制抖音弹幕(https://github.com/SmallPeaches/DanmakuRender/issues/258)
