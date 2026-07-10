@@ -2,8 +2,10 @@ import copy
 import logging
 import os
 import platform
+import tempfile
 from .baserender import BaseRender
 from .ffmpeg import RawFFmpegRender
+from .danmaku_timeline import generate_timeline_png, merge_timeline_filter
 from os.path import exists
 from DMR.utils import *
 
@@ -21,6 +23,7 @@ class DmRender(BaseRender):
                  before_cmd:str=None,
                  after_cmd:str=None,
                  extra_inputs:list=None,
+                 danmaku_timeline:dict=None,
                  **kwargs
                  ):
         self.hwaccel_args = hwaccel_args if hwaccel_args is not None else []
@@ -35,6 +38,7 @@ class DmRender(BaseRender):
         self.before_cmd = before_cmd
         self.after_cmd = after_cmd
         self.extra_inputs = extra_inputs if extra_inputs is not None else []
+        self.danmaku_timeline = danmaku_timeline if isinstance(danmaku_timeline, dict) else {}
 
         self.logger = logging.getLogger(__name__)
         self.raw_ffmpeg = RawFFmpegRender(debug=self.debug)
@@ -43,60 +47,142 @@ class DmRender(BaseRender):
         video_path=video.path
         ffmpeg_args = [self.ffmpeg if self.ffmpeg else 'ffmpeg', '-y']
         ffmpeg_args += self.hwaccel_args
+        timeline_png = None
+        timeline_progress_png = None
         # 渲染前后执行的Python脚本
         if self.before_cmd:
             self._execute_python_script(self.before_cmd, video, "before_render")
 
-        extra_inputs = []
+        try:
+            extra_inputs = []
 
-        for i, extra_input in enumerate(self.extra_inputs):
-            extra_inputs.append(replace_keywords(extra_input, video))
+            for i, extra_input in enumerate(self.extra_inputs):
+                extra_inputs.append(replace_keywords(extra_input, video))
 
-        if self.output_resize:
-            if 'x' in str(self.output_resize):
-                scale_args = ['-s', self.output_resize]
+            source_w, source_h = FFprobe.get_resolution(video_path)
+            if not (source_h and source_w):
+                self.logger.warning(f'获取视频 {video_path} 分辨率失败, 将使用默认分辨率 1920x1080.')
+                source_w, source_h = 1920, 1080
+            output_w, output_h = source_w, source_h
+
+            if self.output_resize:
+                if 'x' in str(self.output_resize):
+                    output_w, output_h = [int(x) for x in str(self.output_resize).lower().split('x', 1)]
+                    scale_args = ['-s', self.output_resize]
+                else:
+                    scale = float(self.output_resize)
+                    output_w, output_h = int(source_w*scale), int(source_h*scale)
+                    scale_args = ['-s', f'{output_w}x{output_h}']
             else:
-                w, h = FFprobe.get_resolution(video_path)
-                if not (h and w):
-                    self.logger.warning(f'获取视频 {video_path} 分辨率失败, 将使用默认分辨率 1920x1080.')
-                    w, h = 1920, 1080
-                scale = float(self.output_resize)
-                w, h = int(w*scale), int(h*scale)
-                scale_args = ['-s', f'{w}x{h}']
-        else:
-            scale_args = ['-noautoscale']
+                scale_args = ['-noautoscale']
 
-        if platform.system().lower() == 'windows':
-            danmaku = danmaku.replace("\\", "/").replace(":/", "\\:/")
+            render_danmaku = danmaku
+            if platform.system().lower() == 'windows':
+                render_danmaku = render_danmaku.replace("\\", "/").replace(":/", "\\:/")
 
-        video['danmaku'] = danmaku
-        # 自定义video filter
-        if self.advanced_render_args.get('filter_complex'):
-            filter_name = '-filter_complex'
-            filter_str = self.advanced_render_args.get('filter_complex')
-            filter_str = replace_keywords(filter_str, video).replace("\n", "").replace("\r", "")
-        else:
-            filter_name = '-vf'
-            filter_str = 'subtitles=filename=\'%s\'' % danmaku
-        
-        ffmpeg_args += [
-            '-fflags', '+discardcorrupt+genpts',
-            '-analyzeduration', '2147483647', '-probesize', '2147483647',
-            '-i', video_path,
-            *extra_inputs,
-            filter_name, filter_str,
+            video['danmaku'] = render_danmaku
+            default_danmaku_filter = 'subtitles=filename=\'%s\'' % render_danmaku
+            timeline_scale_filter = f'scale={output_w}:{output_h}' if self.output_resize else None
+            filter_merged = False
+            timeline_enabled = self.danmaku_timeline.get('enabled', False)
 
-            '-c:v', self.vencoder,
-            *self.vencoder_args,
-            '-c:a', self.aencoder,
-            *self.aencoder_args,
-            *scale_args,
-            output,
-        ]
-        status, info = self.raw_ffmpeg.call_ffmpeg(ffmpeg_args)
+            # 自定义video filter
+            if self.advanced_render_args.get('filter_complex'):
+                filter_name = '-filter_complex'
+                filter_str = self.advanced_render_args.get('filter_complex')
+                filter_str = replace_keywords(filter_str, video).replace("\n", "").replace("\r", "")
+            else:
+                filter_name = '-vf'
+                filter_str = default_danmaku_filter
 
-        if self.after_cmd:
-            self._execute_python_script(self.after_cmd, video, "after_render")
+            if timeline_enabled:
+                duration = video.duration
+                try:
+                    duration = float(duration)
+                except (TypeError, ValueError):
+                    duration = -1
+                if duration <= 0:
+                    duration = FFprobe.get_duration(video_path)
+                if duration <= 0:
+                    self.logger.warning(f'获取视频 {video_path} 时长失败，跳过弹幕密度时间轴.')
+                else:
+                    timeline_file = tempfile.NamedTemporaryFile(prefix='dmr_danmaku_timeline_', suffix='.png', delete=False)
+                    timeline_png = timeline_file.name
+                    timeline_file.close()
+                    timeline_progress_file = tempfile.NamedTemporaryFile(prefix='dmr_danmaku_timeline_progress_', suffix='.png', delete=False)
+                    timeline_progress_png = timeline_progress_file.name
+                    timeline_progress_file.close()
+                    generate_timeline_png(
+                        danmaku,
+                        timeline_png,
+                        duration,
+                        (output_w, output_h),
+                        self.danmaku_timeline,
+                        timeline_progress_png,
+                    )
+                    timeline_input_index = 1 + sum(1 for arg in extra_inputs if str(arg) == '-i')
+                    timeline_progress_input_index = timeline_input_index + 1
+                    merged_filter, filter_merged, warning = merge_timeline_filter(
+                        filter_str if filter_name == '-filter_complex' else None,
+                        timeline_input_index,
+                        timeline_progress_input_index,
+                        duration,
+                        output_w,
+                        output_h,
+                        self.danmaku_timeline,
+                        default_danmaku_filter,
+                        timeline_scale_filter,
+                    )
+                    if warning:
+                        self.logger.warning(warning)
+                    if filter_merged:
+                        extra_inputs += [
+                            '-loop', '1', '-t', duration, '-i', timeline_png,
+                            '-loop', '1', '-t', duration, '-i', timeline_progress_png,
+                        ]
+                        filter_name = '-filter_complex'
+                        filter_str = merged_filter
+                        if timeline_scale_filter:
+                            scale_args = ['-noautoscale']
+                    else:
+                        os.remove(timeline_png)
+                        timeline_png = None
+                        os.remove(timeline_progress_png)
+                        timeline_progress_png = None
+
+            ffmpeg_args += [
+                '-fflags', '+discardcorrupt+genpts',
+                '-analyzeduration', '2147483647', '-probesize', '2147483647',
+                '-i', video_path,
+                *extra_inputs,
+                filter_name, filter_str,
+            ]
+            if filter_merged:
+                ffmpeg_args += ['-map', '[vout]', '-map', '0:a?']
+
+            ffmpeg_args += [
+                '-c:v', self.vencoder,
+                *self.vencoder_args,
+                '-c:a', self.aencoder,
+                *self.aencoder_args,
+                *scale_args,
+                output,
+            ]
+            status, info = self.raw_ffmpeg.call_ffmpeg(ffmpeg_args)
+        finally:
+            if timeline_png and exists(timeline_png):
+                try:
+                    os.remove(timeline_png)
+                except OSError as e:
+                    self.logger.warning(f'清理弹幕密度时间轴临时文件失败: {e}')
+            if timeline_progress_png and exists(timeline_progress_png):
+                try:
+                    os.remove(timeline_progress_png)
+                except OSError as e:
+                    self.logger.warning(f'清理弹幕密度时间轴临时文件失败: {e}')
+
+            if self.after_cmd:
+                self._execute_python_script(self.after_cmd, video, "after_render")
 
         return status, info
 

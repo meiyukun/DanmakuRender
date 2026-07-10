@@ -168,7 +168,7 @@ download_args:
       # 固定热点字号倍率；1.35表示普通弹幕字号的135%
       hot_font_scale: 1.35
       # 热点计数“×N”和后缀emoji的字号倍率，相对热点正文计算；0.78表示比正文略小
-      hot_count_font_scale: 0.78
+      hot_count_font_scale: 0.58
       # 多热点行距倍率，以热点字号为基准；若文字或emoji仍有重叠可继续调大
       hot_line_spacing: 1.25
       # 多个热点会垂直排列，热点组的中心与普通滚动弹幕区域的中心对齐
@@ -381,6 +381,39 @@ render_args:
     after_cmd: ~
     # 额外输入文件，用于合并多个视频文件，放在原视频-i之后
     extra_inputs: ~
+
+    # 弹幕密度时间轴，启用后会在画面底部烧录全场弹幕密度和当前播放进度条
+    danmaku_timeline:
+      # 是否启用弹幕密度时间轴；默认关闭，开启后仅影响 dmrender 输出视频
+      enabled: True
+      # 弹幕密度统计的分桶间隔；小于1表示视频时长比例，大于等于1表示固定秒数
+      sample_interval: 0.001
+      # 密度曲线平滑窗口；小于1表示分桶数量比例，大于等于1表示固定分桶数，1表示不额外平滑
+      smooth_window: 3
+      # 密度归一化使用的峰值分位数；比最大值更稳，避免极端峰值压扁整条曲线
+      peak_percentile: 95
+      # 视觉曲线的gamma值；小于1会抬高中高密度区域，让爆发更明显
+      curve_gamma: 0.55
+      # 突增增强倍率；弹幕数量短时间上升越快，面积图峰值越明显
+      spike_boost: 0.8
+      # 密度面积图的最小显示高度，避免低密度区域完全贴底
+      min_density_height: 0.04
+      # 底部时间轴整体高度，占输出视频高度比例
+      height_ratio: 0.045
+      # 播放进度条高度，占输出视频高度比例
+      bar_height_ratio: 0.008
+      # 时间轴距离底边的留白，占输出视频高度比例
+      margin_bottom_ratio: 0.00
+      # 密度面积图透明度，范围0-1
+      opacity: 0.40
+      # 密度面积图颜色
+      density_color: '#FFFFFF'
+      # 当前播放进度条颜色
+      progress_color: '#00A1D6'
+      # 底部背景带颜色
+      background_color: '#000000'
+      # 底部背景带透明度，范围0-1
+      background_opacity: 0.24
 
     advanced_render_args:
       # 直接定义video filter，这里的{DANMAKU}代表弹幕文件路径
