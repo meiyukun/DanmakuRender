@@ -62,9 +62,22 @@ if __name__ == '__main__':
     dmr.start()
     
     try:
+        last_flush_time = time.time()
         while 1:
-            time.sleep(60)
-            file_handler.flush()
+            time.sleep(5)
+            if time.time() - last_flush_time >= 60:
+                file_handler.flush()
+                last_flush_time = time.time()
+            if dmr.should_restart_now():
+                restart_status = dmr.get_restart_status()
+                if restart_status.get('force'):
+                    logger.warning('正在强制重启 DanmakuRender 以重新加载配置和代码。')
+                else:
+                    logger.info('当前无活跃任务，正在重启 DanmakuRender 以重新加载配置和代码。')
+                dmr.stop()
+                for handler in logger.handlers:
+                    handler.flush()
+                os.execv(sys.executable, [sys.executable] + sys.argv)
     except KeyboardInterrupt:
         dmr.stop()
         exit(0)

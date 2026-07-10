@@ -10,6 +10,7 @@ class LiveEvents(BaseEvents):
         super().__init__(name, config)
         self.state_dict = {}
         self.ended_dict = {}
+        self.recovered_group_ids = set()
         self.logger = logging.getLogger(__name__)
         state_id = hashlib.sha256(name.encode('utf-8')).hexdigest()
         self.state_file = os.path.join('.temp', 'replay_states', f'{state_id}.json')
@@ -23,19 +24,28 @@ class LiveEvents(BaseEvents):
                 state = json.load(f, cls=DateTimeDecoder)
             self.state_dict = state.get('state_dict', {})
             self.ended_dict = state.get('ended_dict', {})
+            self.recovered_group_ids = set(self.state_dict)
             for video_states in self.state_dict.values():
                 for video_state in video_states:
                     for info in video_state.values():
                         if isinstance(info.get('file'), dict):
                             info['file'] = video_info_from_dict(info['file'])
-            self.logger.warning(
-                f'{self.name}: 已恢复 {len(self.state_dict)} 个未完成视频组的流水线状态.'
-            )
+            loaded_count = len(self.state_dict)
+            self._free_state_memory()
+            removed_count = loaded_count - len(self.state_dict)
+            if removed_count:
+                self._save_state()
+                self.logger.info(f'{self.name}: 自动清理 {removed_count} 个已无后续动作的流水线状态.')
+            if self.state_dict:
+                self.logger.warning(
+                    f'{self.name}: 已加载 {len(self.state_dict)} 个未完成视频组的流水线状态.'
+                )
         except Exception as e:
             self.logger.error(f'{self.name}: 恢复流水线状态失败: {e}')
             self.logger.exception(e)
             self.state_dict = {}
             self.ended_dict = {}
+            self.recovered_group_ids = set()
 
     def _save_state(self):
         try:
@@ -50,6 +60,25 @@ class LiveEvents(BaseEvents):
             }, self.state_file)
         except Exception as e:
             self.logger.error(f'{self.name}: 保存流水线状态失败: {e}')
+
+    def delete_recovered_pipeline_state(self, group_id):
+        if group_id not in self.recovered_group_ids:
+            return False, '只能删除本次启动恢复的流水线记录。'
+
+        video_states = self.state_dict.get(group_id)
+        if video_states is None:
+            return False, '流水线记录不存在。'
+        for video_state in video_states:
+            for info in video_state.values():
+                if info.get('wait') or info.get('status') in ('rendering', 'uploading'):
+                    return False, '流水线仍有正在处理或等待响应的任务。'
+
+        self.state_dict.pop(group_id, None)
+        self.ended_dict.pop(group_id, None)
+        self.recovered_group_ids.discard(group_id)
+        self._save_state()
+        self.logger.info(f'{self.name}: 已删除恢复流水线记录 {group_id}，未删除视频文件.')
+        return True, ''
 
     @property
     def event_dict(self):
@@ -360,31 +389,55 @@ class LiveEvents(BaseEvents):
 
         return ret_msgs
     
+    @staticmethod
+    def _file_type_is_configured(args, video_type):
+        return any(
+            configured_type == 'all' or video_type in configured_type.split('+')
+            for configured_type in args
+        )
+
+    def _stage_has_follow_up(self, video_type, info):
+        status = info.get('status')
+        if info.get('wait') or status in ('rendering', 'uploading'):
+            return True
+        if status == 'ready':
+            return (
+                self.config['common_event_args'].get('auto_upload')
+                and self._file_type_is_configured(self.config.get('upload_args', {}), video_type)
+            )
+        if status == 'uploaded':
+            return (
+                self.config['common_event_args'].get('auto_clean')
+                and self._file_type_is_configured(self.config.get('clean_args', {}), video_type)
+            )
+        return status not in (None, 'cleaned')
+
+    def _group_has_follow_up(self, video_states):
+        return any(
+            self._stage_has_follow_up(video_type, info)
+            for video_state in video_states
+            for video_type, info in video_state.items()
+        )
+
     def _free_state_memory(self):
-        final_status = 'ready'
-        if self.config['common_event_args'].get('auto_upload'):
-            final_status = 'uploaded'
-        if self.config['common_event_args'].get('auto_clean'):
-            final_status = 'cleaned'
-        
         for group_id in list(self.ended_dict.keys()):
-            need_free = True
-            for idx, video_state in enumerate(self.state_dict[group_id]):
-                for vtype, info in video_state.items():
-                    if info['status'] is not None and info['status'] != final_status:
-                        need_free = False
-                        break
-                if not need_free: break
-            if need_free:
+            video_states = self.state_dict.get(group_id)
+            if video_states is None:
+                self.ended_dict.pop(group_id)
+                self.recovered_group_ids.discard(group_id)
+                continue
+            if not self._group_has_follow_up(video_states):
                 self.logger.debug(f'视频组{group_id}处理完成，视频信息已被释放.')
                 self.ended_dict.pop(group_id)
                 self.state_dict.pop(group_id)
+                self.recovered_group_ids.discard(group_id)
 
         for group_id in list(self.ended_dict.keys()):
             if time.time() - self.ended_dict[group_id] > 72*3600:
                 self.logger.debug(f'视频组{group_id}处理超时，视频信息将被释放.')
                 self.ended_dict.pop(group_id)
                 self.state_dict.pop(group_id)
+                self.recovered_group_ids.discard(group_id)
 
     def onUploadEnd(self, message:PipeMessage):
         self.logger.info(f'{self.name}: {message.msg}.')

@@ -8,6 +8,21 @@
         这是一个示例文件，不支持保存修改。
     </div>
     {% endif %}
+    {% if filename and filename|lower == 'global.yml' %}
+    <div style="background-color: rgba(255, 165, 0, 0.1); border: 1px solid orange; color: orange; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
+        global.yml 是全局配置，保存后需要重启程序才会生效。
+    </div>
+    {% endif %}
+    {% if saved_global %}
+    <div style="background-color: rgba(76, 175, 80, 0.12); border: 1px solid #4caf50; color: #d8ffd8; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
+        global.yml 已保存。请选择空闲后重启，或强制重启立即加载新配置。
+        <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+            <button type="button" onclick="requestRestart()">空闲后重启</button>
+            <button type="button" onclick="forceRestart()" style="background-color: #dc3545; color: white;">强制重启</button>
+            <a href="{{ url_for('config_list') }}"><button type="button" class="btn-secondary">返回配置列表</button></a>
+        </div>
+    </div>
+    {% endif %}
     <form method="post">
         {% if not filename %}
         <div style="margin-bottom: 20px;">
@@ -69,6 +84,34 @@
                 resultContent.textContent = '检查请求失败: ' + error;
                 resultContainer.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
             });
+        }
+
+        function requestRestart() {
+            if (!confirm('确定要在当前任务空闲后重启程序吗？')) return;
+            fetch('/api/restart/request', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('已排队：程序将在空闲后重启。');
+                    } else {
+                        alert('请求失败: ' + data.message);
+                    }
+                })
+                .catch(error => alert('请求失败: ' + error));
+        }
+
+        function forceRestart() {
+            if (!confirm('强制重启会中断正在运行的录制、渲染、上传或清理任务，确定继续吗？')) return;
+            fetch('/api/restart/force', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('已请求强制重启。');
+                    } else {
+                        alert('请求失败: ' + data.message);
+                    }
+                })
+                .catch(error => alert('请求失败: ' + error));
         }
     </script>
 </div>

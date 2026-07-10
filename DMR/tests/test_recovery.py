@@ -1,13 +1,17 @@
 import json
+import logging
 import os
 import queue
 import tempfile
+import time
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
 
 from DMR.Render import Render
 from DMR.Task.liveevents import LiveEvents
 from DMR.Task.replaytask import ReplayTask
+from DMR.WebService.webapi import WebApi
 from DMR.utils import (
     DateTimeDecoder,
     PipeMessage,
@@ -180,6 +184,121 @@ class PipelineRecoveryTests(WorkingDirectoryTestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].target, 'uploader')
         self.assertEqual(result[0].data['files'][0].path, output.path)
+
+    def test_webui_exposes_recovered_pipeline_groups(self):
+        event = LiveEvents('demo', self._config())
+        video = VideoInfo(
+            path=os.path.abspath('source.mp4'),
+            ctime=datetime.now(),
+            duration=60,
+            group_id='group-1',
+            streamer=StreamerInfo(name='tester'),
+        )
+        event.state_dict = {
+            'group-1': [{
+                'src_video': {'status': 'ready', 'file': video, 'wait': []},
+                'src_video_pre': {'status': None, 'file': None, 'wait': []},
+                'dm_video': {'status': 'uploading', 'file': video, 'wait': ['upload-1']},
+            }],
+        }
+        event.ended_dict = {'group-1': 1}
+        event.recovered_group_ids = {'group-1'}
+
+        api = WebApi.__new__(WebApi)
+        api.engine = SimpleNamespace(task_dict={
+            'demo': {'class': SimpleNamespace(event_class=event)},
+        })
+        api.logger = logging.getLogger(__name__)
+
+        pipelines = api.get_pipeline_states()
+
+        self.assertEqual(len(pipelines), 1)
+        self.assertEqual(pipelines[0]['taskname'], 'demo')
+        self.assertEqual(pipelines[0]['summary'], '处理中')
+        self.assertTrue(pipelines[0]['recovered'])
+        self.assertFalse(pipelines[0]['can_delete'])
+        self.assertEqual(pipelines[0]['stages'][1]['waiting'], 1)
+
+    def test_deleting_recovered_pipeline_state_removes_persisted_record(self):
+        event = LiveEvents('demo', self._config())
+        video = VideoInfo(
+            path=os.path.abspath('source.mp4'),
+            ctime=datetime.now(),
+            duration=60,
+            group_id='group-1',
+            streamer=StreamerInfo(name='tester'),
+        )
+        event.state_dict = {
+            'group-1': [{
+                'src_video': {'status': 'ready', 'file': video, 'wait': []},
+                'src_video_pre': {'status': None, 'file': None, 'wait': []},
+                'dm_video': {'status': 'cleaned', 'file': video, 'wait': []},
+            }],
+        }
+        event.ended_dict = {'group-1': 1}
+        event.recovered_group_ids = {'group-1'}
+        event._save_state()
+
+        deleted, reason = event.delete_recovered_pipeline_state('group-1')
+
+        self.assertTrue(deleted, reason)
+        self.assertNotIn('group-1', event.state_dict)
+        self.assertNotIn('group-1', event.ended_dict)
+        self.assertNotIn('group-1', event.recovered_group_ids)
+        self.assertFalse(os.path.exists(event.state_file))
+
+    def test_load_removes_ended_group_without_follow_up_actions(self):
+        config = self._config()
+        config['common_event_args']['auto_clean'] = True
+        config['clean_args'] = {'dm_video': [{}]}
+        event = LiveEvents('demo', config)
+        video = VideoInfo(
+            path=os.path.abspath('source.mp4'),
+            ctime=datetime.now(),
+            duration=60,
+            group_id='group-1',
+            streamer=StreamerInfo(name='tester'),
+        )
+        event.state_dict = {
+            'group-1': [{
+                'src_video': {'status': 'ready', 'file': video, 'wait': []},
+                'src_video_pre': {'status': None, 'file': None, 'wait': []},
+                'dm_video': {'status': 'cleaned', 'file': video, 'wait': []},
+            }],
+        }
+        event.ended_dict = {'group-1': time.time()}
+        event._save_state()
+
+        restored = LiveEvents('demo', config)
+
+        self.assertEqual(restored.state_dict, {})
+        self.assertEqual(restored.ended_dict, {})
+        self.assertFalse(os.path.exists(restored.state_file))
+
+    def test_load_keeps_ended_group_with_pending_upload(self):
+        config = self._config()
+        event = LiveEvents('demo', config)
+        video = VideoInfo(
+            path=os.path.abspath('rendered.mp4'),
+            ctime=datetime.now(),
+            duration=60,
+            group_id='group-1',
+            streamer=StreamerInfo(name='tester'),
+        )
+        event.state_dict = {
+            'group-1': [{
+                'src_video': {'status': None, 'file': None, 'wait': []},
+                'src_video_pre': {'status': None, 'file': None, 'wait': []},
+                'dm_video': {'status': 'ready', 'file': video, 'wait': []},
+            }],
+        }
+        event.ended_dict = {'group-1': time.time()}
+        event._save_state()
+
+        restored = LiveEvents('demo', config)
+
+        self.assertIn('group-1', restored.state_dict)
+        self.assertIn('group-1', restored.recovered_group_ids)
 
     def test_outbox_survives_restart_until_plugin_accepts_task(self):
         send_queue = queue.Queue()

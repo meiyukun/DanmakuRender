@@ -2,6 +2,53 @@
 
 {% block content %}
 <div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <h2>流水线恢复状态</h2>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="button" onclick="deleteSelectedPipelineStates()" style="background-color: #dc3545; color: white;">删除选中</button>
+            <button type="button" onclick="deleteAllPipelineStates()" style="background-color: #dc3545; color: white;">全部删除</button>
+        </div>
+    </div>
+    <div id="pipeline-states">
+        {% if pipeline_states %}
+        <table>
+            <thead>
+                <tr>
+                    <th><input type="checkbox" onchange="toggleAllPipelineStates(this.checked)"></th>
+                    <th>任务</th>
+                    <th>视频组</th>
+                    <th>来源</th>
+                    <th>状态</th>
+                    <th>阶段详情</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pipeline in pipeline_states %}
+                <tr>
+                    <td><input type="checkbox" class="pipeline-state-checkbox" {% if not pipeline.can_delete %}disabled title="仍有处理中的任务，不能删除"{% endif %} onchange="setPipelineSelectedByIndex({{ loop.index0 }}, this.checked)"></td>
+                    <td>{{ pipeline.taskname }}</td>
+                    <td>{{ pipeline.group_id }}（{{ pipeline.segment_count }} 段）</td>
+                    <td>{{ '重启恢复' if pipeline.recovered else '本次运行' }}</td>
+                    <td>{{ pipeline.summary }}</td>
+                    <td>
+                        <details>
+                        <summary>查看 {{ pipeline.stages|length }} 个阶段</summary>
+                        {% for stage in pipeline.stages %}
+                        <div>{{ stage.type }}：{{ stage.status }}{% if stage.file %} · {{ stage.file }}{% endif %}{% if stage.waiting %} · 等待 {{ stage.waiting }} 个任务{% endif %}</div>
+                        {% endfor %}
+                        </details>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>当前没有未完成的视频组流水线状态。</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
     <h2>渲染队列</h2>
     <div id="render-tasks">
         {% if render_tasks %}
@@ -38,12 +85,19 @@
 </div>
 
 <div class="card">
-    <h2>渲染失败任务</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <h2>渲染失败任务</h2>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="button" onclick="deleteSelectedFailedRenders()" style="background-color: #dc3545; color: white;">删除选中</button>
+            <button type="button" onclick="deleteAllFailedRenders()" style="background-color: #dc3545; color: white;">全部删除</button>
+        </div>
+    </div>
     <div id="failed-renders">
         {% if failed_renders %}
         <table>
             <thead>
                 <tr>
+                    <th><input type="checkbox" onchange="toggleAllFailedRenders(this.checked)"></th>
                     <th>视频</th>
                     <th>输出</th>
                     <th>模式</th>
@@ -54,6 +108,7 @@
             <tbody>
                 {% for task in failed_renders %}
                 <tr>
+                    <td><input type="checkbox" class="failed-render-checkbox" value="{{ task.uuid }}" onchange="setFailedRenderSelected('{{ task.uuid }}', this.checked)"></td>
                     <td>{{ task.video }}</td>
                     <td>{{ task.output }}</td>
                     <td>{{ task.mode }}</td>
@@ -113,12 +168,19 @@
 </div>
 
 <div class="card">
-    <h2>上传失败任务</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <h2>上传失败任务</h2>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="button" onclick="deleteSelectedFailedUploads()" style="background-color: #dc3545; color: white;">删除选中</button>
+            <button type="button" onclick="deleteAllFailedUploads()" style="background-color: #dc3545; color: white;">全部删除</button>
+        </div>
+    </div>
     <div id="failed-tasks">
         {% if failed_tasks %}
         <table>
             <thead>
                 <tr>
+                    <th><input type="checkbox" onchange="toggleAllFailedUploads(this.checked)"></th>
                     <th>文件</th>
                     <th>上传至</th>
                     <th>状态/原因</th>
@@ -128,6 +190,7 @@
             <tbody>
                 {% for task in failed_tasks %}
                 <tr>
+                    <td><input type="checkbox" class="failed-upload-checkbox" value="{{ task.uuid }}" onchange="setFailedUploadSelected('{{ task.uuid }}', this.checked)"></td>
                     <td>
                         {% for f in task.files %}
                             <div>{{ f.name }}</div>
@@ -150,6 +213,142 @@
 </div>
 
 <script>
+    const selectedPipelineStates = new Set();
+    const selectedFailedRenders = new Set();
+    const selectedFailedUploads = new Set();
+    let currentPipelineStates = {{ pipeline_states|tojson }};
+    let currentFailedRenderIds = {{ failed_renders|map(attribute='uuid')|list|tojson }};
+    let currentFailedUploadIds = {{ failed_tasks|map(attribute='uuid')|list|tojson }};
+
+    function pipelineStateKey(pipeline) {
+        return `${pipeline.taskname}\u0000${pipeline.group_id}`;
+    }
+
+    function setPipelineSelectedByIndex(index, checked) {
+        const pipeline = currentPipelineStates[index];
+        if (!pipeline || !pipeline.can_delete) return;
+        const key = pipelineStateKey(pipeline);
+        if (checked) selectedPipelineStates.add(key);
+        else selectedPipelineStates.delete(key);
+    }
+
+    function toggleAllPipelineStates(checked) {
+        currentPipelineStates.forEach(pipeline => {
+            if (!pipeline.can_delete) return;
+            const key = pipelineStateKey(pipeline);
+            if (checked) selectedPipelineStates.add(key);
+            else selectedPipelineStates.delete(key);
+        });
+        document.querySelectorAll('.pipeline-state-checkbox:not(:disabled)').forEach(input => input.checked = checked);
+    }
+
+    function deletePipelineStates(items) {
+        if (items.length === 0) {
+            alert('请先选择要删除的流水线记录。');
+            return;
+        }
+        if (!confirm(`确定删除 ${items.length} 条流水线状态记录吗？视频文件不会被删除。`)) return;
+        fetch('/api/pipeline_states/delete_batch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({items: items}),
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status !== 'success') {
+                    alert('删除失败: ' + data.message);
+                    return;
+                }
+                data.deleted.forEach(item => selectedPipelineStates.delete(pipelineStateKey(item)));
+                if (data.skipped.length > 0) {
+                    alert(`已删除 ${data.deleted.length} 条，另有 ${data.skipped.length} 条仍在处理或不存在。`);
+                }
+                refreshTasks();
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    function deleteSelectedPipelineStates() {
+        const items = currentPipelineStates.filter(pipeline => selectedPipelineStates.has(pipelineStateKey(pipeline)));
+        deletePipelineStates(items);
+    }
+
+    function deleteAllPipelineStates() {
+        deletePipelineStates(currentPipelineStates.filter(pipeline => pipeline.can_delete));
+    }
+
+    function setFailedRenderSelected(uuid, checked) {
+        if (checked) {
+            selectedFailedRenders.add(uuid);
+        } else {
+            selectedFailedRenders.delete(uuid);
+        }
+    }
+
+    function setFailedUploadSelected(uuid, checked) {
+        if (checked) {
+            selectedFailedUploads.add(uuid);
+        } else {
+            selectedFailedUploads.delete(uuid);
+        }
+    }
+
+    function toggleAllFailedRenders(checked) {
+        currentFailedRenderIds.forEach(uuid => setFailedRenderSelected(uuid, checked));
+        document.querySelectorAll('.failed-render-checkbox').forEach(input => input.checked = checked);
+    }
+
+    function toggleAllFailedUploads(checked) {
+        currentFailedUploadIds.forEach(uuid => setFailedUploadSelected(uuid, checked));
+        document.querySelectorAll('.failed-upload-checkbox').forEach(input => input.checked = checked);
+    }
+
+    function deleteFailedBatch(type, uuids) {
+        if (uuids.length === 0) {
+            alert('请先选择要删除的失败任务。');
+            return;
+        }
+        const label = type === 'renders' ? '渲染失败任务' : '上传失败任务';
+        if (!confirm(`确定要删除 ${uuids.length} 个${label}吗？此操作不可恢复。`)) return;
+        const url = type === 'renders'
+            ? '/api/failed_renders/delete_batch'
+            : '/api/failed_uploads/delete_batch';
+        fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({uuids: uuids}),
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    uuids.forEach(uuid => {
+                        selectedFailedRenders.delete(uuid);
+                        selectedFailedUploads.delete(uuid);
+                    });
+                    refreshTasks();
+                } else {
+                    alert('批量删除失败: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    function deleteSelectedFailedRenders() {
+        deleteFailedBatch('renders', Array.from(selectedFailedRenders));
+    }
+
+    function deleteAllFailedRenders() {
+        deleteFailedBatch('renders', currentFailedRenderIds.slice());
+    }
+
+    function deleteSelectedFailedUploads() {
+        deleteFailedBatch('uploads', Array.from(selectedFailedUploads));
+    }
+
+    function deleteAllFailedUploads() {
+        deleteFailedBatch('uploads', currentFailedUploadIds.slice());
+    }
+
     function retryTask(uuid) {
         if (!confirm('确定要重试此任务吗？')) return;
         fetch(`/api/failed_uploads/retry/${uuid}`, { method: 'POST' })
@@ -220,6 +419,39 @@
         fetch('/api/tasks')
             .then(response => response.json())
             .then(data => {
+                const pipelineDiv = document.getElementById('pipeline-states');
+                if (data.pipeline_states && data.pipeline_states.length > 0) {
+                    currentPipelineStates = data.pipeline_states;
+                    const currentKeys = new Set(currentPipelineStates.map(pipelineStateKey));
+                    for (const key of Array.from(selectedPipelineStates)) {
+                        if (!currentKeys.has(key)) selectedPipelineStates.delete(key);
+                    }
+                    let html = '<table><thead><tr><th><input type="checkbox" onchange="toggleAllPipelineStates(this.checked)"></th><th>任务</th><th>视频组</th><th>来源</th><th>状态</th><th>阶段详情</th></tr></thead><tbody>';
+                    data.pipeline_states.forEach((pipeline, index) => {
+                        const stages = pipeline.stages.map(stage => {
+                            const file = stage.file ? ` · ${escapeHtml(stage.file)}` : '';
+                            const waiting = stage.waiting ? ` · 等待 ${stage.waiting} 个任务` : '';
+                            return `<div>${escapeHtml(stage.type)}：${escapeHtml(stage.status)}${file}${waiting}</div>`;
+                        }).join('');
+                        const checked = selectedPipelineStates.has(pipelineStateKey(pipeline)) ? 'checked' : '';
+                        const disabled = pipeline.can_delete ? '' : 'disabled title="仍有处理中的任务，不能删除"';
+                        html += `<tr>
+                            <td><input type="checkbox" class="pipeline-state-checkbox" ${checked} ${disabled} onchange="setPipelineSelectedByIndex(${index}, this.checked)"></td>
+                            <td>${escapeHtml(pipeline.taskname)}</td>
+                            <td>${escapeHtml(pipeline.group_id)}（${pipeline.segment_count} 段）</td>
+                            <td>${pipeline.recovered ? '重启恢复' : '本次运行'}</td>
+                            <td>${escapeHtml(pipeline.summary)}</td>
+                            <td><details><summary>查看 ${pipeline.stages.length} 个阶段</summary>${stages}</details></td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table>';
+                    pipelineDiv.innerHTML = html;
+                } else {
+                    currentPipelineStates = [];
+                    selectedPipelineStates.clear();
+                    pipelineDiv.innerHTML = '<p>当前没有未完成的视频组流水线状态。</p>';
+                }
+
                 // Refresh Render Tasks
                 const renderDiv = document.getElementById('render-tasks');
                 if (data.render_tasks && data.render_tasks.length > 0) {
@@ -247,9 +479,15 @@
                 // Refresh Failed Renders
                 const failedRenderDiv = document.getElementById('failed-renders');
                 if (data.failed_renders && data.failed_renders.length > 0) {
-                    let html = '<table><thead><tr><th>视频</th><th>输出</th><th>模式</th><th>状态/原因</th><th>操作</th></tr></thead><tbody>';
+                    currentFailedRenderIds = data.failed_renders.map(task => task.uuid);
+                    for (const uuid of Array.from(selectedFailedRenders)) {
+                        if (!currentFailedRenderIds.includes(uuid)) selectedFailedRenders.delete(uuid);
+                    }
+                    let html = '<table><thead><tr><th><input type="checkbox" onchange="toggleAllFailedRenders(this.checked)"></th><th>视频</th><th>输出</th><th>模式</th><th>状态/原因</th><th>操作</th></tr></thead><tbody>';
                     data.failed_renders.forEach(task => {
+                        const checked = selectedFailedRenders.has(task.uuid) ? 'checked' : '';
                         html += `<tr>
+                            <td><input type="checkbox" class="failed-render-checkbox" value="${task.uuid}" ${checked} onchange="setFailedRenderSelected('${task.uuid}', this.checked)"></td>
                             <td>${task.video}</td>
                             <td>${task.output}</td>
                             <td>${task.mode}</td>
@@ -263,6 +501,8 @@
                     html += '</tbody></table>';
                     failedRenderDiv.innerHTML = html;
                 } else {
+                    currentFailedRenderIds = [];
+                    selectedFailedRenders.clear();
                     failedRenderDiv.innerHTML = '<p>没有失败的渲染任务。</p>';
                 }
 
@@ -298,13 +538,19 @@
                 // Refresh Failed Tasks
                 const failedDiv = document.getElementById('failed-tasks');
                 if (data.failed_tasks && data.failed_tasks.length > 0) {
-                    let html = '<table><thead><tr><th>文件</th><th>上传至</th><th>状态/原因</th><th>操作</th></tr></thead><tbody>';
+                    currentFailedUploadIds = data.failed_tasks.map(task => task.uuid);
+                    for (const uuid of Array.from(selectedFailedUploads)) {
+                        if (!currentFailedUploadIds.includes(uuid)) selectedFailedUploads.delete(uuid);
+                    }
+                    let html = '<table><thead><tr><th><input type="checkbox" onchange="toggleAllFailedUploads(this.checked)"></th><th>文件</th><th>上传至</th><th>状态/原因</th><th>操作</th></tr></thead><tbody>';
                     data.failed_tasks.forEach(task => {
+                        const checked = selectedFailedUploads.has(task.uuid) ? 'checked' : '';
                         let filesHtml = '';
                         task.files.forEach(f => {
                             filesHtml += `<div>${f.name}</div>`;
                         });
                         html += `<tr>
+                            <td><input type="checkbox" class="failed-upload-checkbox" value="${task.uuid}" ${checked} onchange="setFailedUploadSelected('${task.uuid}', this.checked)"></td>
                             <td>${filesHtml}</td>
                             <td>${task.account} (${task.engine})</td>
                             <td>${task.status}${task.failure_reason ? '：' + task.failure_reason : ''}</td>
@@ -317,10 +563,18 @@
                     html += '</tbody></table>';
                     failedDiv.innerHTML = html;
                 } else {
+                    currentFailedUploadIds = [];
+                    selectedFailedUploads.clear();
                     failedDiv.innerHTML = '<p>没有失败的任务。</p>';
                 }
             })
             .catch(error => console.error('Error refreshing tasks:', error));
+    }
+
+    function escapeHtml(value) {
+        const element = document.createElement('div');
+        element.textContent = value == null ? '' : String(value);
+        return element.innerHTML;
     }
 
     // Refresh every 1 second

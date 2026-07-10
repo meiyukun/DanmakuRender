@@ -8,6 +8,7 @@ import glob
 from flask import Flask, request, render_template, redirect, url_for, flash, session
 from functools import wraps
 from datetime import datetime
+from werkzeug.serving import make_server
 
 from DMR.utils import *
 
@@ -16,6 +17,7 @@ class WebApi:
             self,
             pipe:Tuple[queue.Queue, queue.Queue],
             engine=None,
+            runtime_controller=None,
             host='0.0.0.0',
             port=5000,
             force_login=True,
@@ -25,6 +27,7 @@ class WebApi:
         ) -> None:
         self.send_queue, self.recv_queue = pipe
         self.engine = engine
+        self.runtime_controller = runtime_controller
         self.kwargs = kwargs
         
         # WebAPI Config
@@ -41,6 +44,7 @@ class WebApi:
         self.stoped = True
 
         self.webapp = None
+        self.webserver = None
         self.webapp_thread = None
 
     def login_required(self, f):
@@ -103,6 +107,69 @@ class WebApi:
         def tasks_api():
             return self.get_tasks_data()
 
+        @app.route('/api/pipeline_states/delete_batch', methods=['POST'])
+        @self.login_required
+        def pipeline_states_delete_batch():
+            payload = request.get_json(silent=True) or {}
+            items = payload.get('items')
+            if not isinstance(items, list) or not items:
+                return {'status': 'error', 'message': '请选择要删除的流水线记录。'}, 400
+
+            deleted = []
+            skipped = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                taskname = item.get('taskname')
+                group_id = item.get('group_id')
+                task_info = self.engine.task_dict.get(taskname) if self.engine else None
+                event_class = getattr(task_info.get('class'), 'event_class', None) if task_info else None
+                if not event_class or not group_id:
+                    skipped.append({'taskname': taskname, 'group_id': group_id, 'reason': '记录不存在。'})
+                    continue
+                success, reason = event_class.delete_recovered_pipeline_state(group_id)
+                result = {'taskname': taskname, 'group_id': group_id}
+                if success:
+                    deleted.append(result)
+                else:
+                    result['reason'] = reason
+                    skipped.append(result)
+
+            return {'status': 'success', 'deleted': deleted, 'skipped': skipped}
+
+        @app.route('/api/restart/status')
+        @self.login_required
+        def restart_status_api():
+            return self.get_restart_status()
+
+        @app.route('/api/restart/request', methods=['POST'])
+        @self.login_required
+        def restart_request_api():
+            if not self.runtime_controller:
+                return {'status': 'error', 'message': 'Runtime controller not available.'}, 503
+            self.runtime_controller.request_restart('webui', mode='idle')
+            return {'status': 'success', 'restart': self.get_restart_status()}
+
+        @app.route('/api/restart/force', methods=['POST'])
+        @self.login_required
+        def restart_force_api():
+            if not self.runtime_controller:
+                return {'status': 'error', 'message': 'Runtime controller not available.'}, 503
+            self.runtime_controller.request_restart('webui', mode='force')
+            return {'status': 'success', 'restart': self.get_restart_status()}
+
+        @app.route('/api/restart/cancel', methods=['POST'])
+        @self.login_required
+        def restart_cancel_api():
+            if not self.runtime_controller:
+                return {'status': 'error', 'message': 'Runtime controller not available.'}, 503
+            cancelled = self.runtime_controller.cancel_restart()
+            return {
+                'status': 'success',
+                'cancelled': cancelled,
+                'restart': self.get_restart_status(),
+            }
+
         @app.route('/api/check_config', methods=['POST'])
         @self.login_required
         def check_config_api():
@@ -117,8 +184,6 @@ class WebApi:
         @self.login_required
         def config_list():
             configs = []
-            # List all configs in configs/ folder (except global.yml maybe, or include it)
-            # User said "Edit existing config files (excluding Global.yml)"
             config_dir = 'configs'
             if not os.path.exists(config_dir):
                 os.makedirs(config_dir)
@@ -126,20 +191,23 @@ class WebApi:
             files = glob.glob(os.path.join(config_dir, '*.yml'))
             for f in files:
                 filename = os.path.basename(f)
-                if filename.lower() == 'global.yml':
-                    continue
-                
-                # Extract taskname if possible (DMR-taskname.yml)
-                taskname = filename
-                if filename.startswith('DMR-'):
+                is_global = filename.lower() == 'global.yml'
+                if is_global:
+                    taskname = '全局配置'
+                elif filename.startswith('DMR-'):
                     taskname = filename[4:-4]
                 elif filename.endswith('.yml'):
                     taskname = filename[:-4]
+                else:
+                    taskname = filename
                 
                 configs.append({
                     'filename': filename,
-                    'taskname': taskname
+                    'taskname': taskname,
+                    'is_global': is_global,
                 })
+
+            configs.sort(key=lambda item: (not item['is_global'], item['filename']))
             
             return render_template('config_list.html', configs=configs)
 
@@ -154,6 +222,7 @@ class WebApi:
             config_dir = 'configs'
             content = ""
             check_result = None
+            saved_global = False
             
             if filename:
                 filepath = os.path.join(config_dir, filename)
@@ -194,6 +263,17 @@ class WebApi:
                         try:
                             with open(save_path, 'w', encoding='utf-8') as f:
                                 f.write(content)
+                            if os.path.basename(save_path).lower() == 'global.yml':
+                                saved_global = True
+                                flash('全局配置已保存，重启程序后生效。', 'success')
+                                return render_template(
+                                    'config_edit.html',
+                                    filename=new_filename,
+                                    content=content,
+                                    check_result=check_result,
+                                    saved_global=saved_global,
+                                    restart_status=self.get_restart_status(),
+                                )
                             flash(f'Config {new_filename} saved successfully.', 'success')
                             return redirect(url_for('config_list'))
                         except Exception as e:
@@ -201,13 +281,24 @@ class WebApi:
                     else:
                         flash('Invalid YAML format. Please fix errors before saving.', 'error')
 
-            return render_template('config_edit.html', filename=filename, content=content, check_result=check_result)
+            return render_template(
+                'config_edit.html',
+                filename=filename,
+                content=content,
+                check_result=check_result,
+                saved_global=saved_global,
+                restart_status=self.get_restart_status(),
+            )
 
         @app.route('/config/delete/<filename>', methods=['POST'])
         @self.login_required
         def config_delete(filename):
             config_dir = 'configs'
             if filename:
+                if filename.lower() == 'global.yml':
+                    flash('global.yml 不支持删除。', 'error')
+                    return redirect(url_for('config_list'))
+
                 if filename.startswith('example-'):
                     flash('示例文件不支持删除。', 'error')
                     return redirect(url_for('config_list'))
@@ -250,6 +341,26 @@ class WebApi:
                         return {'status': 'error', 'message': 'Task not found.'}
             return {'status': 'error', 'message': 'Uploader not available.'}
 
+        @app.route('/api/failed_uploads/delete_batch', methods=['POST'])
+        @self.login_required
+        def failed_uploads_delete_batch():
+            req_data = request.get_json(silent=True) or {}
+            uuids = req_data.get('uuids') or []
+            if not isinstance(uuids, list):
+                return {'status': 'error', 'message': 'Invalid uuids.'}, 400
+            if self.engine and 'uploader' in self.engine.plugin_dict:
+                uploader = self.engine.plugin_dict['uploader']['class']
+                if uploader:
+                    deleted = []
+                    missing = []
+                    for task_uuid in uuids:
+                        if uploader.delete_failed_task(task_uuid):
+                            deleted.append(task_uuid)
+                        else:
+                            missing.append(task_uuid)
+                    return {'status': 'success', 'deleted': deleted, 'missing': missing}
+            return {'status': 'error', 'message': 'Uploader not available.'}
+
         @app.route('/api/failed_renders/retry/<uuid>', methods=['POST'])
         @self.login_required
         def failed_renders_retry(uuid):
@@ -275,6 +386,26 @@ class WebApi:
                         return {'status': 'success', 'message': 'Task deleted.'}
                     else:
                         return {'status': 'error', 'message': 'Task not found.'}
+            return {'status': 'error', 'message': 'Render not available.'}
+
+        @app.route('/api/failed_renders/delete_batch', methods=['POST'])
+        @self.login_required
+        def failed_renders_delete_batch():
+            req_data = request.get_json(silent=True) or {}
+            uuids = req_data.get('uuids') or []
+            if not isinstance(uuids, list):
+                return {'status': 'error', 'message': 'Invalid uuids.'}, 400
+            if self.engine and 'render' in self.engine.plugin_dict:
+                render = self.engine.plugin_dict['render']['class']
+                if render:
+                    deleted = []
+                    missing = []
+                    for task_uuid in uuids:
+                        if render.delete_failed_task(task_uuid):
+                            deleted.append(task_uuid)
+                        else:
+                            missing.append(task_uuid)
+                    return {'status': 'success', 'deleted': deleted, 'missing': missing}
             return {'status': 'error', 'message': 'Render not available.'}
 
         return app
@@ -359,13 +490,108 @@ class WebApi:
             'recording_tasks': recording_tasks, 
             'upload_tasks': upload_tasks_list, 
             'failed_tasks': failed_tasks_list,
-            'render_tasks': render_tasks_list,
-            'failed_renders': failed_renders_list
+            'render_tasks': render_tasks_list, 
+            'failed_renders': failed_renders_list,
+            'pipeline_states': self.get_pipeline_states(),
+            'restart_status': self.get_restart_status(),
         }
+
+    def get_pipeline_states(self):
+        pipeline_states = []
+        if not self.engine:
+            return pipeline_states
+
+        type_labels = {
+            'src_video': '原始视频',
+            'src_video_pre': '转码前视频',
+            'dm_video': '弹幕版视频',
+        }
+        status_labels = {
+            None: '未生成',
+            'ready': '已就绪',
+            'rendering': '渲染中',
+            'uploading': '上传中',
+            'uploaded': '已上传',
+            'cleaned': '已清理',
+        }
+
+        try:
+            tasks = list(self.engine.task_dict.items())
+            for taskname, task_info in tasks:
+                replay_task = task_info.get('class')
+                event_class = getattr(replay_task, 'event_class', None)
+                if not event_class:
+                    continue
+
+                ended_groups = set(event_class.ended_dict)
+                recovered_groups = set(getattr(event_class, 'recovered_group_ids', set()))
+                for group_id, video_states in list(event_class.state_dict.items()):
+                    stages = []
+                    active_count = 0
+                    ready_count = 0
+                    for video_state in list(video_states):
+                        for video_type, info in video_state.items():
+                            status = info.get('status')
+                            if status is None and info.get('file') is None:
+                                continue
+                            if status in ('rendering', 'uploading') or info.get('wait'):
+                                active_count += 1
+                            if status == 'ready':
+                                ready_count += 1
+                            video = info.get('file')
+                            path = getattr(video, 'path', '') if video else ''
+                            stages.append({
+                                'type': type_labels.get(video_type, video_type),
+                                'status': status_labels.get(status, status or '未知'),
+                                'file': os.path.basename(path) if path else '',
+                                'waiting': len(info.get('wait', [])),
+                            })
+
+                    ended = group_id in ended_groups
+                    if active_count:
+                        summary = '处理中'
+                    elif ended and ready_count:
+                        summary = '已加载，等待后续处理'
+                    elif ended:
+                        summary = '已结束'
+                    else:
+                        summary = '直播进行中'
+                    pipeline_states.append({
+                        'taskname': taskname,
+                        'group_id': group_id,
+                        'segment_count': len(video_states),
+                        'ended': ended,
+                        'recovered': group_id in recovered_groups,
+                        'can_delete': group_id in recovered_groups and active_count == 0,
+                        'summary': summary,
+                        'stages': stages,
+                    })
+        except RuntimeError:
+            self.logger.debug('流水线状态正在更新，本次 WebUI 刷新跳过。')
+
+        return pipeline_states
+
+    def get_restart_status(self):
+        if not self.runtime_controller:
+            return {
+                'available': False,
+                'pending': False,
+                'mode': 'idle',
+                'force': False,
+                'idle': False,
+                'reason': '',
+                'requested_at': None,
+                'blocking': ['运行时控制器不可用'],
+            }
+
+        status = self.runtime_controller.get_restart_status()
+        status['available'] = True
+        return status
 
     def start_helper(self):
         self.webapp = self.create_app()
-        self.webapp.run(host=self.host, port=self.port, debug=False, use_reloader=False)
+        self.webserver = make_server(self.host, self.port, self.webapp, threaded=True)
+        self.webserver.serve_forever()
 
     def start(self):
         self.webapp_thread = threading.Thread(target=self.start_helper, daemon=True)
@@ -374,6 +600,8 @@ class WebApi:
 
     def stop(self):
         self.stoped = True
-        # Flask doesn't have a clean stop method when running with .run(), 
-        # but since it's a daemon thread, it will die when main process dies.
-        # Alternatively, we could use a production server like waitress/gunicorn but that adds dependencies.
+        if self.webserver:
+            self.webserver.shutdown()
+            self.webserver.server_close()
+        if self.webapp_thread and self.webapp_thread.is_alive():
+            self.webapp_thread.join(timeout=5)

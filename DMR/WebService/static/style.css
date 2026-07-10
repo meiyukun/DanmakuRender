@@ -64,6 +64,10 @@ input, textarea, select {
     font-family: monospace;
 }
 
+input[type="checkbox"] {
+    width: auto;
+}
+
 button {
     background-color: var(--accent-color);
     color: #000;
@@ -76,6 +80,7 @@ button {
 }
 
 button:hover { opacity: 0.9; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-secondary { background-color: var(--secondary-color); }
 
@@ -86,7 +91,41 @@ button:hover { opacity: 0.9; }
     font-weight: bold;
 }
 .status-running { background-color: #4caf50; color: white; }
+.status-waiting { background-color: #ffae4b; color: #000000; }
 .status-stopped { background-color: #000000; color: #888888; border: 1px solid #333333; }
+
+.restart-control {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+}
+
+.restart-status {
+    margin-bottom: 8px;
+}
+
+.restart-blocking {
+    color: #aaaaaa;
+    font-size: 0.95rem;
+}
+
+.restart-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+    .restart-control {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .restart-actions {
+        flex-direction: column;
+    }
+}
 
 .flash-messages {
     margin-bottom: 20px;

@@ -19,6 +19,11 @@ class DanmakuRender():
         self.stoped = True
         self.engine_args = self.config.get_config('dmr_engine_args')
         self.engine = DMREngine()
+        self._restart_lock = threading.Lock()
+        self._restart_requested = False
+        self._restart_mode = 'idle'
+        self._restart_reason = ''
+        self._restart_requested_at = None
 
     def start(self):
         self.stoped = False
@@ -29,7 +34,9 @@ class DanmakuRender():
         self.engine.start()
         plugin_enabled = self.config.get_config('dmr_engine_args')['enabled_plugins']
         for plugin_name in plugin_enabled:
-            plugin_config = self.config.get_config(plugin_name+'_kernel_args')
+            plugin_config = dict(self.config.get_config(plugin_name+'_kernel_args') or {})
+            if plugin_name == 'webservice':
+                plugin_config['runtime_controller'] = self
             self.engine.add_plugin(plugin_name, plugin_config)
 
         for taskname in self.config.get_replaytasks():
@@ -103,3 +110,110 @@ class DanmakuRender():
     def stop(self):
         self.stoped = True
         self.engine.stop()
+
+    def request_restart(self, reason='webui', mode='idle'):
+        if mode not in ('idle', 'force'):
+            mode = 'idle'
+        with self._restart_lock:
+            self._restart_requested = True
+            self._restart_mode = mode
+            self._restart_reason = reason or 'webui'
+            self._restart_requested_at = time.time()
+        if mode == 'force':
+            self.logger.warning(f'已请求强制重启: {self._restart_reason}')
+        else:
+            self.logger.info(f'已请求空闲后重启: {self._restart_reason}')
+
+    def cancel_restart(self):
+        with self._restart_lock:
+            was_requested = self._restart_requested
+            self._restart_requested = False
+            self._restart_mode = 'idle'
+            self._restart_reason = ''
+            self._restart_requested_at = None
+        if was_requested:
+            self.logger.info('已取消空闲后重启请求。')
+        return was_requested
+
+    def is_restart_requested(self):
+        with self._restart_lock:
+            return self._restart_requested
+
+    def should_restart_now(self):
+        status = self.get_restart_status()
+        return status['pending'] and (status['mode'] == 'force' or status['idle'])
+
+    def get_restart_status(self):
+        with self._restart_lock:
+            pending = self._restart_requested
+            mode = self._restart_mode
+            reason = self._restart_reason
+            requested_at = self._restart_requested_at
+
+        idle, blocking = self._get_idle_status()
+        return {
+            'pending': pending,
+            'mode': mode,
+            'force': mode == 'force',
+            'idle': idle,
+            'reason': reason,
+            'requested_at': requested_at,
+            'blocking': blocking,
+        }
+
+    def _get_idle_status(self):
+        blocking = []
+
+        downloader_info = self.engine.plugin_dict.get('downloader')
+        if downloader_info:
+            downloader = downloader_info.get('class')
+            for taskname, task in getattr(downloader, 'download_tasks', {}).items():
+                if self._is_download_task_active(task):
+                    blocking.append(f'录制任务 {taskname}')
+
+        render_info = self.engine.plugin_dict.get('render')
+        if render_info:
+            render_tasks = getattr(render_info.get('class'), 'render_tasks', {})
+            if render_tasks:
+                blocking.append(f'渲染任务 {len(render_tasks)} 个')
+
+        transcriber_info = self.engine.plugin_dict.get('transcriber')
+        if transcriber_info:
+            transcribe_tasks = getattr(transcriber_info.get('class'), 'transcribe_tasks', {})
+            if transcribe_tasks:
+                blocking.append(f'转录任务 {len(transcribe_tasks)} 个')
+
+        uploader_info = self.engine.plugin_dict.get('uploader')
+        if uploader_info:
+            upload_tasks = getattr(uploader_info.get('class'), 'upload_tasks', {})
+            if upload_tasks:
+                blocking.append(f'上传任务 {len(upload_tasks)} 个')
+
+        cleaner_info = self.engine.plugin_dict.get('cleaner')
+        if cleaner_info:
+            clean_tasks = getattr(cleaner_info.get('class'), 'clean_tasks', {})
+            active_clean_tasks = [
+                task for task in clean_tasks.values()
+                if task.get('status') == 'cleaning'
+            ]
+            if active_clean_tasks:
+                blocking.append(f'清理任务 {len(active_clean_tasks)} 个')
+
+        return len(blocking) == 0, blocking
+
+    @staticmethod
+    def _is_download_task_active(task):
+        if getattr(task, 'onair', False):
+            return True
+
+        if hasattr(task, 'downloader') and task.downloader is not None:
+            downloader = task.downloader
+            for proc_name in ('ffmpeg_proc', 'streamlink_proc', 'streamgears_proc', 'ytdl_proc', 'yutto_proc'):
+                proc = getattr(downloader, proc_name, None)
+                if proc is not None and getattr(proc, 'poll', lambda: None)() is None:
+                    return True
+
+        if task.__class__.__name__ in ('StreamDownloadTask', 'SyncStreamDownloadTask'):
+            return not getattr(task, 'stoped', True)
+
+        return False

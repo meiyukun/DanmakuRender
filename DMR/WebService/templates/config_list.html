@@ -22,7 +22,7 @@
                 <td>{{ config.taskname }}</td>
                 <td>
                 <a href="{{ url_for('config_edit', filename=config.filename) }}">编辑</a>
-                 {% if not config.filename.startswith('example-') %}
+                 {% if not config.filename.startswith('example-') and not config.is_global %}
                  <a href="javascript:void(0);" onclick="confirmDelete('{{ config.filename }}', '{{ url_for('config_delete', filename=config.filename) }}')" style="color: red; margin-left: 10px;">删除</a>
                  {% endif %}
              </td>

@@ -2,6 +2,21 @@
 
 {% block content %}
 <div class="card">
+    <h2>运行控制</h2>
+    <div class="restart-control">
+        <div>
+            <div id="restart-status" class="restart-status"></div>
+            <div id="restart-blocking" class="restart-blocking"></div>
+        </div>
+        <div class="restart-actions">
+            <button id="restart-request-btn" onclick="requestRestart()">空闲后重启</button>
+            <button id="restart-force-btn" onclick="forceRestart()" style="background-color: #dc3545; color: white;">强制重启</button>
+            <button id="restart-cancel-btn" class="btn-secondary" onclick="cancelRestart()" style="display: none;">取消重启</button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
     <h2>正在录制</h2>
     <div id="recording-tasks">
         {% if recording_tasks %}
@@ -34,10 +49,93 @@
 </div>
 
 <script>
+    function renderRestartStatus(status) {
+        const statusDiv = document.getElementById('restart-status');
+        const blockingDiv = document.getElementById('restart-blocking');
+        const requestBtn = document.getElementById('restart-request-btn');
+        const forceBtn = document.getElementById('restart-force-btn');
+        const cancelBtn = document.getElementById('restart-cancel-btn');
+
+        if (!status || !status.available) {
+            statusDiv.innerHTML = '<span class="status-badge status-stopped">不可用</span>';
+            blockingDiv.textContent = '运行时控制器不可用';
+            requestBtn.disabled = true;
+            forceBtn.disabled = true;
+            cancelBtn.style.display = 'none';
+            return;
+        }
+
+        if (status.pending) {
+            statusDiv.innerHTML = status.force
+                ? '<span class="status-badge status-waiting">强制重启中</span>'
+                : status.idle
+                ? '<span class="status-badge status-running">即将重启</span>'
+                : '<span class="status-badge status-waiting">等待空闲</span>';
+            requestBtn.disabled = true;
+            forceBtn.disabled = status.force;
+            cancelBtn.style.display = '';
+        } else {
+            statusDiv.innerHTML = status.idle
+                ? '<span class="status-badge status-running">当前空闲</span>'
+                : '<span class="status-badge status-waiting">任务运行中</span>';
+            requestBtn.disabled = false;
+            forceBtn.disabled = false;
+            cancelBtn.style.display = 'none';
+        }
+
+        if (status.blocking && status.blocking.length > 0) {
+            blockingDiv.textContent = '阻塞：' + status.blocking.join('、');
+        } else {
+            blockingDiv.textContent = status.pending ? '重启请求已排队。' : '可在空闲时重启以重新加载 global.yml 和代码。';
+        }
+    }
+
+    function requestRestart() {
+        if (!confirm('确定要在当前任务空闲后重启程序吗？')) return;
+        fetch('/api/restart/request', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    renderRestartStatus(data.restart);
+                } else {
+                    alert('请求失败: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Error requesting restart:', error));
+    }
+
+    function forceRestart() {
+        if (!confirm('强制重启会中断正在运行的录制、渲染、上传或清理任务，确定继续吗？')) return;
+        fetch('/api/restart/force', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    renderRestartStatus(data.restart);
+                } else {
+                    alert('请求失败: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Error forcing restart:', error));
+    }
+
+    function cancelRestart() {
+        fetch('/api/restart/cancel', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    renderRestartStatus(data.restart);
+                } else {
+                    alert('取消失败: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Error canceling restart:', error));
+    }
+
     function refreshTasks() {
         fetch('/api/tasks')
             .then(response => response.json())
             .then(data => {
+                renderRestartStatus(data.restart_status);
                 // Refresh Recording Tasks
                 const recordingDiv = document.getElementById('recording-tasks');
                 if (data.recording_tasks.length > 0) {
@@ -62,6 +160,7 @@
             .catch(error => console.error('Error refreshing tasks:', error));
     }
 
+    renderRestartStatus({{ restart_status|tojson }});
     // Refresh every 1 second
     setInterval(refreshTasks, 1000);
 </script>
