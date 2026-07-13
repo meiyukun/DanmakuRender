@@ -429,35 +429,56 @@ download_args:
       session_timeout: 8
       # 颜色强调阈值：达到该条数时开始使用 color 滚动；6表示第6条起生效
       color_threshold: 6
-      # 固定热点阈值：达到该条数时不再滚动，改为显示“内容 ×N 后缀”
-      # 该值必须大于或等于 color_threshold
-      hot_threshold: 10
       # 强调阶段颜色，使用6位RGB十六进制颜色码，不要包含#号
-      color: ff9900
-      # 固定热点颜色，使用6位RGB十六进制颜色码，不要包含#号
-      hot_color: ff0000
-      # 固定热点字号相对普通弹幕的倍率；1.35表示放大至135%
-      hot_font_scale: 1.35
-      # 热点计数“×N”和后缀emoji的字号倍率，相对热点正文计算；0.78表示比正文略小
-      hot_count_font_scale: 0.78
+      color: ff9900  # 橙色（重复弹幕达到颜色强调阈值后使用）
+      # 项目字体目录；hot_levels.font_file 使用该目录下的字体文件
+      fonts_dir: ./fonts
+      # 热点最大宽度比例、最小字号倍率、超宽省略和同时展示上限
+      hot_max_width: 0.85
+      # 实际字体宽度安全系数，以及热点形成前重复长弹幕的滚动宽度上限
+      hot_width_safety: 1.12
+      pre_hot_max_width: 0.75
+      hot_min_font_scale: 1.0
+      hot_ellipsis: True
+      hot_max_visible: 0  # 0表示根据滚动区域高度自动计算
       # 多热点行距倍率，以热点字号为基准；调大可避免大字号、描边或emoji发生重叠
       hot_line_spacing: 1.25
       # 多个热点会垂直排列，热点组的中心与普通滚动弹幕区域的中心对齐
       # 热点不会占用或缩减普通弹幕轨道
-      # 热点计数后缀，最终显示效果例如“太强了 ×10 🔥”
-      hot_suffix: 🔥
-      # 热点首次出现及“×N”计数变化时播放的强调特效
-      hot_update_effect:
-        # 是否启用缩放脉冲和描边光晕；关闭后热点只更新文字
-        enabled: True
-        # 特效持续时间（秒），建议设置为0.2-0.4
-        duration: 0.25
-        # 初始缩放倍率，随后恢复原大小；1.25表示从125%缩回100%
-        pulse_scale: 1.25
-        # 初始光晕描边宽度，随后恢复为普通 outlinesize
-        glow_size: 4
-        # 初始光晕模糊强度，随后恢复为0
-        glow_blur: 3
+      # 等级必须按threshold严格递增；font_file优先于系统字体家族名font
+      # pulse只在该热点计数更新时触发一次，不会持续闪烁
+      hot_levels:
+        - threshold: 10
+          font: Microsoft YaHei
+          color: ff0000  # 红色
+          font_scale: 1.35
+          count_font_scale: 0.78
+          outline_color: '000000'  # 黑色描边
+          outline_size: 1.5
+          suffix: 🔥
+          pulse: {enabled: False}
+        - threshold: 20
+          color: ff4500  # 橙红色
+          font_scale: 1.5
+          outline_size: 2
+          suffix: 🔥🔥
+          pulse: {enabled: False}
+        - threshold: 50
+          font_file: cover1.ttf
+          color: ffd700  # 金色
+          font_scale: 1.7
+          outline_color: '6b2500'  # 深棕色描边
+          outline_size: 2.5
+          suffix: ⚡🔥
+          pulse: {enabled: True, scale: 1.08, duration_ms: 600, glow_size: 3, glow_blur: 1}
+        - threshold: 100
+          font_file: cover1.ttf
+          color: ff1493  # 深粉红色
+          font_scale: 1.9
+          outline_color: ffffff  # 白色描边
+          outline_size: 3
+          suffix: 🔥🔥🔥
+          pulse: {enabled: True, scale: 1.12, duration_ms: 500, glow_size: 4, glow_blur: 2}
     # 弹幕流选项
     dm_stream_option:
       # 用于获取抖音弹幕流的cookies，用于特殊情况下录制抖音弹幕(https://github.com/SmallPeaches/DanmakuRender/issues/258)
@@ -607,6 +628,8 @@ render_args:
   dmrender:
     # 渲染输出文件夹，默认为在录制输出文件夹后面加上“弹幕版”
     output_dir: ~
+    # ASS字幕额外字体目录；系统字体无需放入该目录
+    fonts_dir: ./fonts
     # 渲染文件名称，默认在录制文件后面加上“弹幕版”
     output_name: ~
     # 生成的视频文件格式，默认mp4

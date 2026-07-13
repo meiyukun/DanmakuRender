@@ -24,6 +24,7 @@ class DmRender(BaseRender):
                  after_cmd:str=None,
                  extra_inputs:list=None,
                  danmaku_timeline:dict=None,
+                 fonts_dir:str=None,
                  **kwargs
                  ):
         self.hwaccel_args = hwaccel_args if hwaccel_args is not None else []
@@ -39,6 +40,7 @@ class DmRender(BaseRender):
         self.after_cmd = after_cmd
         self.extra_inputs = extra_inputs if extra_inputs is not None else []
         self.danmaku_timeline = danmaku_timeline if isinstance(danmaku_timeline, dict) else {}
+        self.fonts_dir = fonts_dir
 
         self.logger = logging.getLogger(__name__)
         self.raw_ffmpeg = RawFFmpegRender(debug=self.debug)
@@ -82,6 +84,17 @@ class DmRender(BaseRender):
 
             video['danmaku'] = render_danmaku
             default_danmaku_filter = 'subtitles=filename=\'%s\'' % render_danmaku
+            fonts_filter_option = ''
+            if self.fonts_dir:
+                render_fonts_dir = os.path.abspath(os.path.expanduser(str(self.fonts_dir)))
+                if os.path.isdir(render_fonts_dir):
+                    if platform.system().lower() == 'windows':
+                        render_fonts_dir = render_fonts_dir.replace("\\", "/").replace(":/", "\\:/")
+                    render_fonts_dir = render_fonts_dir.replace("'", "\\'")
+                    fonts_filter_option = ":fontsdir='%s'" % render_fonts_dir
+                    default_danmaku_filter += fonts_filter_option
+                else:
+                    self.logger.warning('ASS字幕字体目录不存在，将只使用系统字体: %s', render_fonts_dir)
             timeline_scale_filter = f'scale={output_w}:{output_h}' if self.output_resize else None
             filter_merged = False
             timeline_enabled = self.danmaku_timeline.get('enabled', False)
@@ -91,6 +104,13 @@ class DmRender(BaseRender):
                 filter_name = '-filter_complex'
                 filter_str = self.advanced_render_args.get('filter_complex')
                 filter_str = replace_keywords(filter_str, video).replace("\n", "").replace("\r", "")
+                if fonts_filter_option and 'fontsdir=' not in filter_str:
+                    subtitle_filter = "subtitles=filename='%s'" % render_danmaku
+                    filter_str = filter_str.replace(
+                        subtitle_filter,
+                        subtitle_filter + fonts_filter_option,
+                        1,
+                    )
             else:
                 filter_name = '-vf'
                 filter_str = default_danmaku_filter
