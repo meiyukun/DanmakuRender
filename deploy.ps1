@@ -77,7 +77,8 @@ foreach ($server in $servers) {
     Write-Host "Updating $($server.Name) on $($server.Host):$($server.Dir)..."
 
     $remoteDir = Quote-Bash $server.Dir
-    $remoteCommand = "set -e; cd $remoteDir; git pull -f"
+    $remoteBranch = Quote-Bash $Branch
+    $remoteCommand = "set -e; cd $remoteDir; git fetch origin $remoteBranch; git reset --hard FETCH_HEAD; git clean -fd"
 
     Invoke-Checked "ssh" @($server.Host, $remoteCommand)
 }
