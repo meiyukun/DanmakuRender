@@ -120,11 +120,19 @@ class LiveEvents(BaseEvents):
             'uploader/error': self.defaultEvent,
             'cleaner/end': self.defaultEvent,
             'cleaner/error': self.defaultEvent,
+            'tick': self.onTick,
             'default': self.defaultEvent,
         }
     
     def defaultEvent(self, message:PipeMessage):
-        self.logger.info(f'{self.name}: {message.msg}')
+        if message.msg:
+            self.logger.info(f'{self.name}: {message.msg}')
+        else:
+            self.logger.debug('%s: 收到无文本事件 %s/%s。', self.name, message.source, message.event)
+
+    def onTick(self, *args, **kwargs):
+        """Internal pipeline heartbeat; intentionally produces no user-visible log."""
+        return None
 
     def onReady(self, *args, **kwargs):
         return PipeMessage(

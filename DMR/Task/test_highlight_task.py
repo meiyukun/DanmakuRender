@@ -18,6 +18,14 @@ class HighlightTaskTests(unittest.TestCase):
             event.state_file = os.path.join(temp, 'state.json')
             self.assertIn('downloader/liveend', event.event_dict)
             self.assertIn('highlight/subscribe', event.event_dict)
+            self.assertIs(event.event_dict['tick'].__func__, event.onTick.__func__)
+
+    def test_empty_internal_event_does_not_emit_info_log(self):
+        event = LiveEvents('empty-log', {'common_event_args': {'auto_upload': False, 'auto_clean': False}})
+        with self.assertLogs(event.logger, level='DEBUG') as captured:
+            event.defaultEvent(PipeMessage('task', 'replay/empty-log', 'accepted', msg=''))
+        self.assertFalse(any('INFO' in line for line in captured.output))
+        self.assertIn('收到无文本事件', captured.output[0])
 
     def test_config_classifies_dmh_and_deep_merges_target(self):
         config = Config('configs/global.yml')
