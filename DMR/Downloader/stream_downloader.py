@@ -121,6 +121,7 @@ class StreamDownloadTask():
         
         video_info.path = newfile
         video_info.dm_file_id = newdmfile
+        video_info.raw_dm_file_id = splitext(newdmfile)[0] + '.danmaku.jsonl' if newdmfile else None
         if self.advanced_video_args.get('group_id'):
             group_id = str(self.advanced_video_args['group_id'])
             group_id = replace_keywords(group_id, video_info)
@@ -136,6 +137,8 @@ class StreamDownloadTask():
                 os.remove(video_info.path)
             if video_info.dm_file_id and exists(video_info.dm_file_id):
                 os.remove(video_info.dm_file_id)
+            if video_info.raw_dm_file_id and exists(video_info.raw_dm_file_id):
+                os.remove(video_info.raw_dm_file_id)
             self.segment_start_time = datetime.now()
             return
 
@@ -307,7 +310,7 @@ class StreamDownloadTask():
                 live_end = False
                 self._pipeSend('livestart', '直播开始', dtype='str', data=self.sess_id)
                 self.start_once()
-                if self.liveapi.Onair():
+                if self.loop and self.liveapi.Onair():
                     raise RuntimeError(f'{self.taskname} 录制异常退出.')
             except KeyboardInterrupt:
                 self.stop()

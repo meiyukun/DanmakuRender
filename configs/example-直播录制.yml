@@ -12,20 +12,6 @@ common_event_args:
   # 原视频自动语音转文字生成SRT字幕
   auto_transcribe: False
 
-# 语音转录参数。启用B站AI字幕时取消以下注释，并在全局配置启用transcriber插件。
-# transcribe_args:
-#   engine: bilibili
-#   bilibili:
-#     # B站字幕任务的账号名称
-#     account: bilibili-subtitle
-#     # B站登录文件；为空时读取.login_info/{account}.json
-#     cookies: .login_info/bilibili-subtitle.json
-# 如需自动渲染等待并烧录该SRT：
-# render_args:
-#   dmrender:
-#     burn_subtitle: True
-
-# 下载参数
 download_args:
   # 下载类型
   dltype: live

@@ -19,6 +19,9 @@ dmr_engine_args:
   # 配置文件路径
   # 可设置为文件/文件夹列表
   config_path: ./configs
+  # 重启时是否恢复录制任务的未完成流水线状态和待投递消息。
+  # 单个 DMR-*.yml 可通过 common_event_args.recover_pipeline 覆盖此设置。
+  recover_pipeline: True
 
 # 下载器核心参数
 downloader_kernel_args:
@@ -244,6 +247,8 @@ download_args:
     # 高级弹幕录制参数
     # 请确保你明白这些参数的含义后再修改
     advanced_dm_args:
+      # 是否额外保存未经关键词、碰撞、重复聚合和ASS后处理的原始弹幕JSONL；热点分析默认优先使用。
+      save_raw_danmaku: True
       # 弹幕延迟补偿(秒)，将弹幕强行提前
       dm_delay_fixed: 6
       # 弹幕超时自动重启（秒），超过一段时间无弹幕会自动重启弹幕录制，0表示关闭
@@ -359,8 +364,6 @@ render_kernel_args:
 transcriber_kernel_args:
   # 指定同时执行的转录任务数。B站字幕轮询耗时较长，默认允许3个分段并行等待。
   ntranscribers: 3
-
-# 语音转录默认参数
 transcribe_args:
   # 转录引擎，可选 xm、bilibili
   engine: xm

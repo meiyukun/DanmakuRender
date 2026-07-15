@@ -9,7 +9,10 @@ executable_tools_path:
   biliup: ~
 
 # DMR引擎参数
-dmr_engine_args: 
+dmr_engine_args:
+  # 重启时不恢复未完成流水线；单个 DMR-*.yml 可通过
+  # common_event_args.recover_pipeline: true 单独恢复。
+  recover_pipeline: false
   # 选择组件
   # 可选组件： downloader（下载器）, render（渲染器）, uploader（上传器）, cleaner（清理器），webservice（WebUI服务，默认不启用）
   enabled_plugins: ['downloader', 'render', 'uploader', 'cleaner', 'transcriber', 'webservice']
@@ -250,6 +253,8 @@ download_args:
     # 高级弹幕录制参数
     # 请确保你明白这些参数的含义后再修改
     advanced_dm_args:
+      # 是否额外保存未经关键词、碰撞、重复聚合和ASS后处理的原始弹幕JSONL；热点分析默认优先使用。
+      save_raw_danmaku: True
       # 弹幕延迟补偿(秒)，将弹幕强行提前
       # 也可以设置为负数延后弹幕
       dm_delay_fixed: 6
@@ -367,7 +372,6 @@ transcriber_kernel_args:
   # 同时执行的转录任务数；B站字幕等待时间较长，建议至少为3
   ntranscribers: 3
 
-# 语音转录默认参数
 transcribe_args:
   # 转录引擎：xm使用小米转录，bilibili使用B站自动字幕
   engine: bilibili

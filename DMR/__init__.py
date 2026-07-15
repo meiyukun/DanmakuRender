@@ -29,8 +29,8 @@ class DanmakuRender():
         self.stoped = False
         os.makedirs('.temp', exist_ok=True)
         
-        self.logger.debug(f'Global Config:\n{json.dumps(self.config.global_config, indent=4, ensure_ascii=False)}')
-        self.logger.debug(f'Replay Config:\n{json.dumps(self.config.replay_config, indent=4, ensure_ascii=False)}')
+        self.logger.debug(f'Global Config:\n{json.dumps(self._redact_config(self.config.global_config), indent=4, ensure_ascii=False)}')
+        self.logger.debug(f'Replay Config:\n{json.dumps(self._redact_config(self.config.replay_config), indent=4, ensure_ascii=False)}')
         self.engine.start()
         plugin_enabled = self.config.get_config('dmr_engine_args')['enabled_plugins']
         for plugin_name in plugin_enabled:
@@ -44,8 +44,21 @@ class DanmakuRender():
             if replay_config.get('common_event_args', {}).get('auto_transcribe') and 'transcriber' not in plugin_enabled:
                 self.logger.error(f'任务 {taskname} 已启用 auto_transcribe，但 dmr_engine_args.enabled_plugins 未启用 transcriber 插件。')
             self.engine.add_task(taskname, replay_config)
+        for taskname in self.config.get_highlighttasks():
+            self.engine.add_task(taskname, self.config.get_highlight_config(taskname), 'highlight')
 
         threading.Thread(target=self._monintor, daemon=True).start()
+
+    @classmethod
+    def _redact_config(cls, value, key=''):
+        sensitive = {'api_key', 'cookies', 'cookie', 'password', 'token', 'access_token', 'refresh_token'}
+        if key.lower() in sensitive and value not in (None, ''):
+            return '***REDACTED***'
+        if isinstance(value, dict):
+            return {item_key: cls._redact_config(item, item_key) for item_key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._redact_config(item, key) for item in value]
+        return value
 
     def check_config_update(self):
         try:
@@ -55,24 +68,29 @@ class DanmakuRender():
                 self.logger.info('检测到全局配置更新，请重启程序以生效。')
             
             elif update_type == 'tasks':
-                for config_path in update_info['new']:
+                for config_path in sorted(update_info['new'], key=lambda path: os.path.basename(path).startswith('DMH-')):
                     taskname = filename_to_taskname(config_path)
                     self.logger.info(f'检测到新任务配置文件: {taskname}，正在添加任务...')
-                    self.engine.add_task(taskname, self.config.get_replay_config(taskname))
+                    task_type = 'highlight' if os.path.basename(config_path).startswith('DMH-') else 'replay'
+                    getter = self.config.get_highlight_config if task_type == 'highlight' else self.config.get_replay_config
+                    self.engine.add_task(taskname, getter(taskname), task_type)
                 
                 for config_path in update_info['deleted']:
                     taskname = filename_to_taskname(config_path)
                     self.logger.info(f'检测到任务配置文件删除: {taskname}，正在停止任务...')
-                    self.engine.del_task(taskname)
+                    task_type = 'highlight' if os.path.basename(config_path).startswith('DMH-') else 'replay'
+                    self.engine.del_task(taskname, task_type)
 
                 for config_path in update_info['updated']:
                     taskname = filename_to_taskname(config_path)
                     self.logger.info(f'检测到任务配置文件更新: {taskname}，正在重启任务...')
                     
-                    self.engine.del_task(taskname)
+                    task_type = 'highlight' if os.path.basename(config_path).startswith('DMH-') else 'replay'
+                    self.engine.del_task(taskname, task_type)
                     time.sleep(5)
                     new_taskname = filename_to_taskname(config_path)
-                    self.engine.add_task(new_taskname, self.config.get_replay_config(new_taskname))
+                    getter = self.config.get_highlight_config if task_type == 'highlight' else self.config.get_replay_config
+                    self.engine.add_task(new_taskname, getter(new_taskname), task_type)
 
         except Exception as e:
             self.logger.error(f'动态载入配置文件错误:')

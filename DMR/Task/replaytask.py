@@ -21,7 +21,17 @@ class ReplayTask():
         self.stoped = True
         outbox_id = hashlib.sha256(taskname.encode('utf-8')).hexdigest()
         self.outbox_file = os.path.join('.temp', 'replay_outbox', f'{outbox_id}.json')
-        self._outbox = self._load_outbox()
+        self.recover_pipeline = config.get('common_event_args', {}).get('recover_pipeline', True)
+        if self.recover_pipeline:
+            self._outbox = self._load_outbox()
+        else:
+            self._outbox = {}
+            if os.path.exists(self.outbox_file):
+                try:
+                    os.remove(self.outbox_file)
+                    self.logger.info(f'{self.taskname}: 已按配置丢弃待投递流水线消息.')
+                except OSError as e:
+                    self.logger.warning(f'{self.taskname}: 丢弃待投递流水线消息失败: {e}')
 
     @staticmethod
     def _restore_message_data(data):
@@ -109,7 +119,7 @@ class ReplayTask():
                                 else:
                                     self.logger.error(f'Event:{event} return an unknown type of message.')
 
-                    if msg.source in ('render', 'uploader') and msg.event == 'end':
+                    if msg.source in ('render', 'uploader', 'highlight') and msg.event == 'end':
                         self._pipeSend(PipeMessage(
                             source=self.taskname,
                             target=msg.source,
@@ -129,6 +139,8 @@ class ReplayTask():
         self.stoped = False
         self._piperecvprocess = threading.Thread(target=self._pipeRecvMonitor, daemon=True)
         self._piperecvprocess.start()
+        self._tickprocess = threading.Thread(target=self._tick_monitor, daemon=True)
+        self._tickprocess.start()
 
         for event, trigger in self.event_class.event_dict.items():
             if isinstance(trigger, (list, tuple, set)):
@@ -138,6 +150,16 @@ class ReplayTask():
 
         for persisted in list(self._outbox.values()):
             self._pipeSend(PipeMessage(**persisted))
+
+    def _tick_monitor(self):
+        while not self.stoped:
+            threading.Event().wait(30)
+            if not self.stoped:
+                self.recv_queue.put(PipeMessage(
+                    source=self.taskname,
+                    target=f'replay/{self.taskname}',
+                    event='tick',
+                ))
 
     def stop(self):
         self.stoped = True

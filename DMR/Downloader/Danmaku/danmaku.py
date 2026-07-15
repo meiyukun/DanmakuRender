@@ -10,6 +10,7 @@ from datetime import datetime
 from DMR.Downloader.Danmaku.AssHandle.ass_handle import ass_handle_default
 from DMR.LiveAPI.danmaku import DanmakuClient
 from DMR.utils import SimpleDanmaku, replace_keywords
+from .raw_writer import RawDanmakuWriter
 
 __all__ = ['DanmakuDownloader']
 
@@ -38,6 +39,10 @@ class DanmakuDownloader():
         self.dm_auto_restart = self.advanced_dm_args.get('dm_auto_restart', 300)
         self.dm_extra_inputs = self.advanced_dm_args.get('dm_extra_inputs', [])
         self.dm_file_min_time = self.advanced_dm_args.get('dm_file_min_time', 10)
+        self.save_raw_danmaku = bool(self.advanced_dm_args.get('save_raw_danmaku', True))
+        self.raw_output = os.path.splitext(output)[0] + '.danmaku.jsonl'
+        self.rawwriter = RawDanmakuWriter(enabled=self.save_raw_danmaku)
+        self.raw_dm_file = None
 
         self.dm_filter = dm_filter.copy() if dm_filter else {}
         try:
@@ -92,6 +97,8 @@ class DanmakuDownloader():
         self.part_start_time = self.start_time
         self.dm_file = self.output.replace(f'%03d','%03d'%self.part)
         self.dmwriter.open(self.dm_file)
+        self.raw_dm_file = self.raw_output.replace(f'%03d','%03d'%self.part)
+        self.rawwriter.open(self.raw_dm_file)
 
         def monitor():
             while not self.stoped:
@@ -108,11 +115,16 @@ class DanmakuDownloader():
         self.part += 1
         self.part_start_time = datetime.now().timestamp()
         old_dm_file = self.dm_file
+        old_raw_dm_file = self.raw_dm_file
         if not self.stoped:
             new_dm_file = self.output.replace(f'%03d','%03d'%self.part)
             self.logger.debug(f'New DMfile: {new_dm_file}')
             self.dmwriter.open(new_dm_file)
             self.dm_file = new_dm_file
+            self.raw_dm_file = self.raw_output.replace(f'%03d','%03d'%self.part)
+            self.rawwriter.open(self.raw_dm_file)
+        else:
+            self.rawwriter.close()
 
         ass_handle_default(old_dm_file)
         if filename:
@@ -120,6 +132,12 @@ class DanmakuDownloader():
                 os.rename(old_dm_file, filename)
             except Exception as e:
                 self.logger.error(f'弹幕 {old_dm_file} 分段失败: {e}.')
+            if self.save_raw_danmaku and old_raw_dm_file and os.path.exists(old_raw_dm_file):
+                raw_filename = os.path.splitext(filename)[0] + '.danmaku.jsonl'
+                try:
+                    os.rename(old_raw_dm_file, raw_filename)
+                except Exception as e:
+                    self.logger.error(f'原始弹幕 {old_raw_dm_file} 分段失败: {e}.')
 
     def dm_available(self, dm:SimpleDanmaku) -> bool:
         if dm.time < 0 \
@@ -173,15 +191,25 @@ class DanmakuDownloader():
                 try:
                     dm = q.get_nowait()
                     if not isinstance(dm, SimpleDanmaku):
+                        raw_payload = dict(dm)
+                        standard_keys = {
+                            'msg_type', 'dtype', 'name', 'uname', 'content', 'text',
+                            'timestamp', 'time', 'color', 'raw_payload',
+                        }
+                        extra_payload = {key: value for key, value in raw_payload.items() if key not in standard_keys}
                         dm = SimpleDanmaku(
-                            dtype=dm.get('msg_type', 'other'),
-                            uname=dm.get('name', ''),
+                            dtype=dm.get('msg_type', dm.get('dtype', 'other')),
+                            uname=dm.get('name', dm.get('uname', '')),
                             content=dm.get('content', ''),
+                            text=dm.get('text'),
                             timestamp=dm.get('timestamp', datetime.now().timestamp()),
                             color=dm.get('color', 'ffffff'),
+                            raw_payload=raw_payload,
+                            **extra_payload,
                         )
                     # 将绝对时间转换为相对时间
                     dm.time = dm.timestamp - self.part_start_time - self.dm_delay_fixed
+                    self.rawwriter.add(dm, source_url=url)
                     # 载入弹幕模板
                     if dm_templ := self.dm_template.get(dm.dtype):
                         dm.text = replace_keywords(dm_templ, dm)
@@ -231,12 +259,18 @@ class DanmakuDownloader():
 
     def stop(self):
         self.stoped = True
+        self.rawwriter.close()
         self.logger.debug('danmaku writer stoped.')
 
         # 删除过短的弹幕文件
         if datetime.now().timestamp() - self.part_start_time < self.dm_file_min_time:
             try:
                 os.remove(self.dm_file)
+            except Exception as e:
+                self.logger.debug(e)
+            try:
+                if self.raw_dm_file and os.path.exists(self.raw_dm_file):
+                    os.remove(self.raw_dm_file)
             except Exception as e:
                 self.logger.debug(e)
         return True

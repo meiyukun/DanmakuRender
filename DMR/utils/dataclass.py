@@ -140,6 +140,7 @@ class VideoInfo(FileInfo):
                 dm_video_id:str=None,
                 src_video_id:str=None,
                 dm_file_id:str=None,
+                raw_dm_file_id:str=None,
                 **kwargs):
         self.streamer = streamer
         self.duration = duration
@@ -149,6 +150,7 @@ class VideoInfo(FileInfo):
         self.dm_video_id = dm_video_id
         self.src_video_id = src_video_id
         self.dm_file_id = dm_file_id
+        self.raw_dm_file_id = raw_dm_file_id
         self.group_id = group_id
         self.segment_id = segment_id
         super().__init__(
@@ -165,6 +167,7 @@ class VideoInfo(FileInfo):
                 dm_video_id=dm_video_id,
                 src_video_id=src_video_id,
                 dm_file_id=dm_file_id,
+                raw_dm_file_id=raw_dm_file_id,
                 group_id=group_id,
                 segment_id=segment_id,
                 **kwargs

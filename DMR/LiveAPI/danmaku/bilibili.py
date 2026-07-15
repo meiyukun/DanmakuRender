@@ -124,8 +124,10 @@ class Bilibili(DMAPI):
                         msg["name"] = j.get("info", ["", "", ["", ""]])[2][1] or j.get(
                             "data", {}
                         ).get("uname", "")
+                        msg["uid"] = j.get("info", ["", "", [None]])[2][0]
                         msg["color"] = f"{j.get('info', [[0, 0, 0, 16777215]])[0][3]:06x}"
                         msg["content"] = j.get("info")[1]
+                        msg["raw"] = j
                         try:
                             msg['timestamp'] = j.get('info')[0][4]/1000
                             if j.get('info')[13] != r'{}':
@@ -143,6 +145,8 @@ class Bilibili(DMAPI):
                         msg['name'] = j.get('data', {}).get('uname', '')
                         msg['content'] = j.get('data', {}).get('msg', '')
                         msg["color"] = 'ffffff'
+                        msg["uid"] = j.get('data', {}).get('uid')
+                        msg["raw"] = j
                         
                     elif msg["msg_type"] == "broadcast":
                         msg["type"] = j.get("msg_type", 0)
@@ -155,6 +159,8 @@ class Bilibili(DMAPI):
                         msg["content"] = j.get('data', {}).get('message', '')
                         msg["price"] = j.get('data', {}).get('price', 0)
                         msg["color"] = j.get('data', {}).get('background_color', 'ffffff')
+                        msg["uid"] = j.get('data', {}).get('uid')
+                        msg["raw"] = j
                         try:
                             msg['timestamp'] = j.get('data', {}).get('ts')
                         except:

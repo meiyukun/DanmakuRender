@@ -175,9 +175,10 @@ class VirtualDownloaderTask:
                 elif not self.fake_onair() and self.onair:
                     self.onair = False
                     self.start_time = time.time()
+                    ended_session_id = self.sess_id
                     self.sess_id = uuid(8)
                     self.sess_videos = []
-                    self._pipeSend('liveend', '直播结束', dtype='str', data=self.sess_id)
+                    self._pipeSend('liveend', '直播结束', dtype='str', data=ended_session_id)
                 
                 if self.onair:
                     self.find_files()

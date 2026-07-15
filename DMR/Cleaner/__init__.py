@@ -157,6 +157,10 @@ class Cleaner():
                 if dm_file and exists(dm_file):
                     self.logger.info(f'正在清理弹幕文件: {method} {dm_file}.')
                     files.append(dm_file)
+                raw_dm_file = file.get('raw_dm_file_id')
+                if raw_dm_file and exists(raw_dm_file):
+                    self.logger.info(f'正在清理原始弹幕文件: {method} {raw_dm_file}.')
+                    files.append(raw_dm_file)
                 cleaned_files.extend(files)
                 
                 for f in files:

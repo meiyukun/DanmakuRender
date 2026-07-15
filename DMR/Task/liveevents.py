@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import hashlib
+from copy import deepcopy
 from .baseevents import BaseEvents
 from ..utils import *
 
@@ -10,11 +11,21 @@ class LiveEvents(BaseEvents):
         super().__init__(name, config)
         self.state_dict = {}
         self.ended_dict = {}
+        self.highlight_subscribers = set()
+        self.highlight_holds = {}
         self.recovered_group_ids = set()
         self.logger = logging.getLogger(__name__)
         state_id = hashlib.sha256(name.encode('utf-8')).hexdigest()
         self.state_file = os.path.join('.temp', 'replay_states', f'{state_id}.json')
-        self._load_state()
+        self.recover_pipeline = config.get('common_event_args', {}).get('recover_pipeline', True)
+        if self.recover_pipeline:
+            self._load_state()
+        elif os.path.exists(self.state_file):
+            try:
+                os.remove(self.state_file)
+                self.logger.info(f'{self.name}: 已按配置丢弃未完成流水线状态，未删除视频文件.')
+            except OSError as e:
+                self.logger.warning(f'{self.name}: 丢弃未完成流水线状态失败: {e}')
 
     def _load_state(self):
         if not os.path.exists(self.state_file):
@@ -24,6 +35,7 @@ class LiveEvents(BaseEvents):
                 state = json.load(f, cls=DateTimeDecoder)
             self.state_dict = state.get('state_dict', {})
             self.ended_dict = state.get('ended_dict', {})
+            self.highlight_holds = {key: set(value) for key, value in state.get('highlight_holds', {}).items()}
             self.recovered_group_ids = set(self.state_dict)
             for video_states in self.state_dict.values():
                 for video_state in video_states:
@@ -64,6 +76,7 @@ class LiveEvents(BaseEvents):
                 'taskname': self.name,
                 'state_dict': self.state_dict,
                 'ended_dict': self.ended_dict,
+                'highlight_holds': {key: sorted(value) for key, value in self.highlight_holds.items()},
             }, self.state_file)
         except Exception as e:
             self.logger.error(f'{self.name}: 保存流水线状态失败: {e}')
@@ -100,6 +113,9 @@ class LiveEvents(BaseEvents):
             'render/error': self.defaultEvent,
             'transcriber/end': self.onTranscribeEnd,
             'transcriber/error': self.onTranscribeError,
+            'highlight/subscribe': self.onHighlightSubscribe,
+            'highlight/unsubscribe': self.onHighlightUnsubscribe,
+            'highlight/release': self.onHighlightRelease,
             'uploader/end': self.onUploadEnd,
             'uploader/error': self.defaultEvent,
             'cleaner/end': self.defaultEvent,
@@ -287,10 +303,59 @@ class LiveEvents(BaseEvents):
         if self.config['common_event_args'].get('auto_upload'):
             upload_msgs = self._check_for_upload(group_id)
             ret_msgs += upload_msgs
+        for subscriber in sorted(self.highlight_subscribers):
+            self.highlight_holds.setdefault(group_id, set()).add(subscriber)
+            video_states = deepcopy(self.state_dict.get(group_id, []))
+            ret_msgs.append(PipeMessage(
+                source=f'replay/{self.name}', target=f'highlight/{subscriber}', event='source_ready',
+                data={'source_task': self.name, 'group_id': group_id,
+                      'session_ended': True, 'segment_count': len(video_states),
+                      'video_states': video_states},
+            ))
 
         self._free_state_memory()
         self._save_state()
         return ret_msgs
+
+    def onHighlightSubscribe(self, message):
+        task = (message.data or {}).get('highlight_task')
+        ret_msgs = []
+        if task:
+            was_subscribed = task in self.highlight_subscribers
+            self.highlight_subscribers.add(task)
+            self.logger.info('%s: 热点任务 %s 已订阅直播结束事件。', self.name, task)
+            if not was_subscribed:
+                for group_id in self.ended_dict:
+                    if group_id not in self.state_dict:
+                        continue
+                    self.highlight_holds.setdefault(group_id, set()).add(task)
+                    video_states = deepcopy(self.state_dict[group_id])
+                    ret_msgs.append(PipeMessage(
+                        source=f'replay/{self.name}', target=f'highlight/{task}', event='source_ready',
+                        data={'source_task': self.name, 'group_id': group_id,
+                              'session_ended': True, 'segment_count': len(video_states),
+                              'video_states': video_states},
+                    ))
+                self._save_state()
+        return ret_msgs
+
+    def onHighlightUnsubscribe(self, message):
+        task = (message.data or {}).get('highlight_task')
+        self.highlight_subscribers.discard(task)
+        for holds in self.highlight_holds.values():
+            holds.discard(task)
+        self._free_state_memory()
+        self._save_state()
+
+    def onHighlightRelease(self, message):
+        data = message.data or {}
+        holds = self.highlight_holds.get(data.get('group_id'))
+        if holds is not None:
+            holds.discard(data.get('highlight_task'))
+            if not holds:
+                self.highlight_holds.pop(data.get('group_id'), None)
+        self._free_state_memory()
+        self._save_state()
     
     def _check_for_upload(self, group_id:str, _idx:int=None):
         ret_msgs = []
@@ -409,9 +474,14 @@ class LiveEvents(BaseEvents):
     def _check_for_clean(self, group_id=None):
         ret_msgs = []
         clean_args = self.config['clean_args']
+        requested_group = group_id
         for group_id, video_states in self.state_dict.items():
+            if requested_group is not None and requested_group != group_id:
+                continue
             for idx, video_state in enumerate(video_states):
                 for vtype, info in video_state.items():
+                    if self.highlight_holds.get(group_id) and vtype in ('src_video', 'src_video_pre', 'dm_video', 'subtitle'):
+                        continue
                     if info['status'] != 'uploaded':
                         continue
                     for clean_file_types, clean_arg in clean_args.items():
@@ -485,10 +555,11 @@ class LiveEvents(BaseEvents):
                 self.ended_dict.pop(group_id)
                 self.recovered_group_ids.discard(group_id)
                 continue
-            if not self._group_has_follow_up(video_states):
+            if not self._group_has_follow_up(video_states) and not self.highlight_holds.get(group_id):
                 self.logger.debug(f'视频组{group_id}处理完成，视频信息已被释放.')
                 self.ended_dict.pop(group_id)
                 self.state_dict.pop(group_id)
+                self.highlight_holds.pop(group_id, None)
                 self.recovered_group_ids.discard(group_id)
 
         for group_id in list(self.ended_dict.keys()):

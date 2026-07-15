@@ -21,6 +21,7 @@
 [**安装文档**](docs/installation.md)       
 [**使用文档**](docs/usage.md)     
 [**意外停机与自动处理链恢复机制**](docs/crash-recovery.md)
+[**开发参考**](docs/development.md)
 
 [**服务器录播示例**](https://github.com/SmallPeaches/DanmakuRender/discussions/368)
 

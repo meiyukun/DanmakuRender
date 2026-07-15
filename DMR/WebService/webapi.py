@@ -122,7 +122,8 @@ class WebApi:
                     continue
                 taskname = item.get('taskname')
                 group_id = item.get('group_id')
-                task_info = self.engine.task_dict.get(taskname) if self.engine else None
+                task_info = (self.engine.task_dict.get(f'replay/{taskname}') or
+                             self.engine.task_dict.get(taskname)) if self.engine else None
                 event_class = getattr(task_info.get('class'), 'event_class', None) if task_info else None
                 if not event_class or not group_id:
                     skipped.append({'taskname': taskname, 'group_id': group_id, 'reason': '记录不存在。'})
@@ -505,6 +506,7 @@ class WebApi:
             'src_video': '原始视频',
             'src_video_pre': '转码前视频',
             'dm_video': '弹幕版视频',
+            'subtitle': '语音字幕',
         }
         status_labels = {
             None: '未生成',
@@ -517,7 +519,23 @@ class WebApi:
 
         try:
             tasks = list(self.engine.task_dict.items())
-            for taskname, task_info in tasks:
+            for task_key, task_info in tasks:
+                if task_info.get('task_type', 'replay') == 'highlight':
+                    highlight_task = task_info.get('class')
+                    for job_id, job in list(getattr(highlight_task, 'jobs', {}).items()):
+                        pipeline_states.append({
+                            'taskname': task_info.get('name', task_key.split('/', 1)[-1]),
+                            'task_type': 'highlight', 'group_id': job.get('group_id', job_id),
+                            'ended': job.get('status') in ('completed', 'failed'),
+                            'recovered': True, 'active_count': 1 if job.get('status') in ('analyzing', 'rendering', 'uploading') else 0,
+                            'ready_count': len(job.get('outputs') or []),
+                            'segment_count': len(job.get('segments') or []),
+                            'can_delete': False, 'summary': job.get('status'),
+                            'stages': [{'type': '热点混剪', 'status': job.get('status'),
+                                        'file': os.path.basename(job.get('manifest') or ''), 'waiting': 0}],
+                        })
+                    continue
+                taskname = task_info.get('name', task_key.split('/', 1)[-1])
                 replay_task = task_info.get('class')
                 event_class = getattr(replay_task, 'event_class', None)
                 if not event_class:

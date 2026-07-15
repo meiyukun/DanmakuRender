@@ -16,6 +16,7 @@ class Config():
         self.global_config_path = global_config_path
         self.replay_config_path_raw = []
         self.replay_config_paths:List[str] = []
+        self.highlight_config_paths:List[str] = []
         self.file_hashes = {}
         self.logger = logging.getLogger(__name__)
         
@@ -35,6 +36,7 @@ class Config():
 
         self.global_config = deepcopy(self._base_config)
         self.replay_config = {}
+        self.highlight_config = {}
 
         with open(self.global_config_path, 'r', encoding='utf-8') as f:
             _global_config = yaml.safe_load(f)
@@ -57,6 +59,10 @@ class Config():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 _replay_config = yaml.safe_load(f)
+            _replay_config = _replay_config or {}
+            if any(key in _replay_config for key in ('highlight_args', 'highlight_upload_args')) or \
+                    (_replay_config.get('common_event_args') or {}).get('auto_highlight'):
+                raise ValueError('热点剪辑已迁移到独立 DMH-*.yml；请删除直播任务中的 auto_highlight、highlight_args 和 highlight_upload_args。')
             
             current_hash = self._get_file_hash(config_path)
             self.file_hashes[config_path] = current_hash
@@ -67,6 +73,11 @@ class Config():
             common_args = _replay_config.get('common_event_args')
             if not common_args: return None
             replay_config['common_event_args'] = deepcopy(common_args)
+            # 默认保持原有的恢复行为；全局设置可由单个录制任务覆盖。
+            replay_config['common_event_args'].setdefault(
+                'recover_pipeline',
+                self.global_config.get('dmr_engine_args', {}).get('recover_pipeline', True),
+            )
             
             global_download_args = self.global_config['download_args']
             dltype = _replay_config.get('download_args', {}).get('dltype', 'live')
@@ -125,6 +136,47 @@ class Config():
             self.logger.exception(e)
             return None
 
+    def add_highlight_config(self, config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                raw = yaml.safe_load(f) or {}
+            if raw.get('task_type') != 'highlight':
+                raise ValueError('DMH 配置必须声明 task_type: highlight。')
+            defaults = deepcopy(raw.get('defaults') or {})
+            defaults.setdefault('source', {}).setdefault('min_segment_duration', 30)
+            defaults.setdefault('upload', {}).setdefault('common', {}).setdefault('engine', 'biliwebapi')
+            targets = raw.get('targets') or {}
+            if not isinstance(targets, dict) or not targets:
+                raise ValueError('热点任务至少需要配置一个 targets 直播任务。')
+            resolved = {}
+            for source_task, override in targets.items():
+                override = override or {}
+                merged = merge_dict(deepcopy(defaults), override)
+                source = merged.get('source') or {}
+                if source.get('video', 'src_video') not in ('src_video', 'dm_video'):
+                    raise ValueError(f'{source_task}: source.video 仅支持 src_video 或 dm_video。')
+                if source.get('subtitle', 'prefer') not in ('disabled', 'available', 'prefer', 'required'):
+                    raise ValueError(f'{source_task}: source.subtitle 策略无效。')
+                resolved[source_task] = merged
+            taskname = filename_to_taskname(config_path)
+            if self.highlight_config and taskname not in self.highlight_config:
+                configured = ', '.join(self.highlight_config)
+                raise ValueError(
+                    f'全局只能加载一份 DMH-*.yml 热点剪辑配置；当前已加载 {configured}，不能再加载 {taskname}。'
+                )
+            self.highlight_config[taskname] = {
+                'task_type': 'highlight',
+                'runtime': deepcopy(raw.get('runtime') or {}),
+                'defaults': defaults,
+                'targets': resolved,
+            }
+            self.file_hashes[config_path] = self._get_file_hash(config_path)
+            return taskname
+        except Exception as e:
+            self.logger.error(f'Error loading highlight config {config_path}:')
+            self.logger.exception(e)
+            return None
+
     def check_update(self):
         updated_tasks = []
         new_tasks = []
@@ -141,15 +193,22 @@ class Config():
 
         # get replay configs
         current_files = set()
+        current_highlight_files = set()
         for raw_path in self.replay_config_path_raw:
             if os.path.isfile(raw_path):
-                current_files.add(raw_path)
+                if os.path.basename(raw_path).startswith('DMH-'):
+                    current_highlight_files.add(raw_path)
+                else:
+                    current_files.add(raw_path)
             elif os.path.isdir(raw_path):
                 config_files = glob.glob(os.path.join(raw_path, 'DMR-**.yml'))
                 for f in config_files:
                     current_files.add(f)
+                for f in glob.glob(os.path.join(raw_path, 'DMH-**.yml')):
+                    current_highlight_files.add(f)
 
         old_files = set(self.replay_config_paths)
+        old_highlight_files = set(self.highlight_config_paths)
         
         for f in current_files - old_files:
             if self.add_task_config(f):
@@ -168,9 +227,21 @@ class Config():
                     updated_tasks.append(f)
             except Exception:
                 pass
+
+        for f in current_highlight_files - old_highlight_files:
+            if self.add_highlight_config(f):
+                new_tasks.append(f)
+        for f in old_highlight_files - current_highlight_files:
+            deleted_tasks.append(f)
+            self.highlight_config.pop(filename_to_taskname(f), None)
+            self.file_hashes.pop(f, None)
+        for f in current_highlight_files & old_highlight_files:
+            if self._get_file_hash(f) != self.file_hashes.get(f) and self.add_highlight_config(f):
+                updated_tasks.append(f)
         
         if new_tasks or deleted_tasks or updated_tasks:
             self.replay_config_paths = list(current_files)
+            self.highlight_config_paths = list(current_highlight_files)
             return 'tasks', {
                 'new': list(new_tasks),
                 'deleted': list(deleted_tasks),
@@ -187,3 +258,9 @@ class Config():
     
     def get_replaytasks(self):
         return list(self.replay_config.keys())
+
+    def get_highlight_config(self, taskname):
+        return self.highlight_config.get(taskname)
+
+    def get_highlighttasks(self):
+        return list(self.highlight_config.keys())

@@ -7,7 +7,7 @@ from .Downloader import Downloader
 from .Render import Render
 from .Transcriber import Transcriber
 from .Uploader import Uploader
-from .Task import ReplayTask
+from .Task import HighlightTask, ReplayTask
 from .WebService import WebService
 from .utils import *
 
@@ -25,12 +25,15 @@ class DMREngine():
         self.logger.debug(message)
         if target == 'engine':
             self.recv_queue.put(message)
-        elif target.startswith('replay/'):
-            taskname = target.split('/')[1]
-            if taskname not in self.task_dict:
-                self.logger.error(f'Task {taskname} not exists.')
+        elif target.startswith(('replay/', 'highlight/')):
+            task_key = target
+            if task_key not in self.task_dict:
+                if self.stoped:
+                    self.logger.debug(f'Ignore message for stopped task {task_key}.')
+                else:
+                    self.logger.error(f'Task {task_key} not exists.')
                 return
-            self.task_dict[taskname]['send_queue'].put(message)
+            self.task_dict[task_key]['send_queue'].put(message)
         elif target == 'render':
             self.plugin_dict['render']['send_queue'].put(message)
         elif target == 'uploader':
@@ -72,18 +75,19 @@ class DMREngine():
         self._piperecvprocess.start()
         self.logger.debug('DMR engine started.')
 
-        for name, plugin in self.plugin_dict.values():
+        for name, plugin in self.plugin_dict.items():
             if plugin['status'] == 0:
                 plugin['class'].start()
-                self.plugin_dict['name']['status'] = 1
+                self.plugin_dict[name]['status'] = 1
                 self.logger.debug(f'Plugin {name} started.')
         
-        for name, task in self.task_dict.values():
+        for task_key, task in self.task_dict.items():
             if task['status'] == 0:
                 task['class'].start()
-                self.task_dict['name']['status'] = 1
-                self.pipeSend(PipeMessage('engine', f'replay/{name}', 'ready'))
-                self.logger.debug(f'Task {name} started.')
+                self.task_dict[task_key]['status'] = 1
+                if task['task_type'] == 'replay':
+                    self.pipeSend(PipeMessage('engine', task_key, 'ready'))
+                self.logger.debug(f'Task {task_key} started.')
 
     def add_plugin(self, name, config):
         send_queue = queue.Queue()
@@ -114,35 +118,50 @@ class DMREngine():
             'status': 0 if self.stoped else 1,
         }
 
-    def add_task(self, taskname, config):
+    def add_task(self, taskname, config, task_type='replay'):
         send_queue = queue.Queue()
-        task = ReplayTask(taskname, config, (self.recv_queue, send_queue))
-        self.task_dict[taskname] = {
+        task_cls = HighlightTask if task_type == 'highlight' else ReplayTask
+        task = task_cls(taskname, config, (self.recv_queue, send_queue))
+        task_key = f'{task_type}/{taskname}'
+        self.task_dict[task_key] = {
             'class': task,
             'config': config,
             'send_queue': send_queue,
+            'task_type': task_type,
+            'name': taskname,
             'status': 0 if self.stoped else 1,
         }
         if self.stoped == False:
             task.start()
-            self.pipeSend(PipeMessage('engine', f'replay/{taskname}', 'ready'))
+            if task_type == 'replay':
+                self.pipeSend(PipeMessage('engine', f'replay/{taskname}', 'ready'))
+                for other in self.task_dict.values():
+                    if other.get('task_type') == 'highlight' and taskname in other['config'].get('targets', {}):
+                        highlight_name = other['name']
+                        self.pipeSend(PipeMessage(
+                            f'highlight/{highlight_name}', f'replay/{taskname}', 'highlight/subscribe',
+                            data={'highlight_task': highlight_name},
+                        ))
             self.logger.debug(f'Task {taskname} started.')
         else:
             self.logger.debug(f'Task {taskname} created.')
 
-    def del_task(self, taskname):
-        if taskname in self.task_dict:
-            self.pipeSend(PipeMessage('engine', f'replay/{taskname}', 'exit'))
+    def del_task(self, taskname, task_type='replay'):
+        task_key = f'{task_type}/{taskname}'
+        if task_key in self.task_dict:
+            self.pipeSend(PipeMessage('engine', task_key, 'exit'))
             # self.task_dict[taskname]['class'].stop()
-            del self.task_dict[taskname]
+            del self.task_dict[task_key]
             self.logger.debug(f'Task {taskname} deleted.')
         else:
             self.logger.debug(f'Task {taskname} not exists.')
 
     def stop(self):
         self.stoped = True
-        for taskname in list(self.task_dict.keys()):
-            self.del_task(taskname)
+        task_keys = sorted(self.task_dict.keys(), key=lambda key: 0 if key.startswith('highlight/') else 1)
+        for task_key in task_keys:
+            task_type, taskname = task_key.split('/', 1)
+            self.del_task(taskname, task_type)
         for name in self.plugin_dict.keys():
             try:
                 self.plugin_dict[name]['class'].stop()

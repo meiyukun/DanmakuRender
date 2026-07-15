@@ -1,0 +1,171 @@
+# 全局热点剪辑配置示例。实际使用时复制为一个 DMH-*.yml 文件。
+# 整个程序只加载一份 DMH 配置；defaults 供所有直播任务共用，targets 提供逐任务覆盖。
+# 热点任务等待整场直播结束后，一次性按分段顺序分析该场直播的全部录制分段。
+task_type: highlight
+
+runtime:
+  # 同时处理的整场直播数；视频编码较占资源，建议从 1 开始。
+  max_workers: 1
+  # 单个任务失败后的重试次数与间隔（秒）。
+  retry_count: 1
+  retry_interval: 60
+
+# 所有 targets 共用的默认配置；目标内同名字段会递归覆盖，列表整体替换，~ 表示清空。
+defaults:
+  source:
+    # src_video 使用无弹幕原版；dm_video 使用已渲染弹幕的视频。
+    video: src_video
+    # auto 优先原始 JSONL，缺失时回退 ASS；也可设 raw 或 ass。
+    danmaku: auto
+    # 原始记录中参与分析的消息类型；完整原始记录不会因此丢字段。
+    danmaku_types: [danmaku, emoticon]
+    # disabled 不用字幕；available 只用已有字幕；prefer 等待后可降级；required 超时即失败。
+    subtitle: prefer
+    # 等待字幕或预处理产物的最长时间（秒）。
+    subtitle_timeout: 10800
+    # 优先复用直播任务已经生成的弹幕视频和字幕。
+    reuse_existing: true
+    # 小于该时长的异常/收尾碎片不参与热点分析和剪辑，单位秒；设为0关闭过滤。
+    min_segment_duration: 30
+
+  preprocess:
+    # 缺少 dm_video 时使用的完整渲染参数；字段格式与 render_args.dmrender 一致。
+    dmrender: {}
+    # 缺少字幕且策略要求生成时使用的完整转录参数；字段格式与 transcribe_args 一致。
+    transcribe: {}
+
+  analysis:
+    detection:
+      peak_smoothing_seconds: 5
+      boundary_smoothing_seconds: 2
+      baseline_radius_seconds: 120
+      baseline_exclusion_seconds: 30
+      prominence_search_seconds: 180
+      min_peak_messages: 8
+      min_peak_z: 3.0
+      min_prominence_ratio: 1.0
+      require_reaction_signal: true
+      reaction_min_count: 5
+      reaction_min_ratio: 0.18
+      dominant_reaction_min_ratio: 0.10
+      reaction_max_chars: 16
+      short_message_chars: 8
+      discussion_min_chars: 12
+      discussion_max_ratio: 0.75
+      reaction_score_weight: 1.5
+      boundary_threshold_mad: 1.0
+      boundary_threshold_ratio: 0.50
+      boundary_quiet_seconds: 3
+      boundary_search_seconds: 60
+      pre_roll_seconds: 5
+      post_roll_seconds: 2
+      peak_merge_max_gap_seconds: 30
+      peak_merge_valley_ratio: 0.35
+      min_clip_seconds: 10
+      max_clip_seconds: 45
+      campaign_bucket_seconds: 5
+      campaign_min_duration: 120
+      campaign_dominant_ratio: 0.35
+    ai:
+      # AI 只接收候选区间内的“时间+文本”，不发送昵称、用户 ID 或弹幕类型。
+      enabled: false
+      base_url: ''
+      api_key_env: DMR_HIGHLIGHT_API_KEY
+      api_key: ''
+      model: gpt-5.4
+      timeout: 120
+      batch_size: 8
+      min_confidence: 0.65
+      max_tokens: 1800
+      system_prompt: ~
+
+  encoding:
+    # 为空时在源视频旁创建按热点任务隔离的输出目录。
+    output_dir: ~
+    format: mp4
+    ffmpeg: ~
+    vencoder: libx264
+    vencoder_args: [-crf, '26', -preset, medium]
+    aencoder: aac
+    aencoder_args: [-b:a, 192k]
+    output_fps: 60
+    output_resolution: ~
+
+  outputs:
+    - id: all
+      name: 综合高能
+      categories: ['*']
+      max_clips: 12
+      max_total_duration: 300
+      output_name: ~
+    - id: funny
+      name: 纯搞笑场面
+      categories: [funny]
+      max_clips: 8
+      max_total_duration: 180
+      output_name: ~
+
+  upload:
+    # 热点成片上传总开关；与直播任务的 auto_upload 完全独立。
+    enabled: false
+    # 上传通用参数，格式与 upload_args 的单个上传项一致。
+    common:
+      engine: biliwebapi
+      account: bilibili
+      cookies: ~
+      task_upload_lock: true
+      retry: 3
+      timeout: 0
+      realtime: false
+      concat_video: false
+      min_length: 0
+      line: ~
+      limit: 3
+      copyright: 1
+      source: ''
+      tid: 21
+      cover: ~
+      title: '{SOURCE_TASK} 高能混剪'
+      desc: ''
+      dynamic: ''
+      tag: '直播回放,高能混剪'
+      dolby: 0
+      hires: 0
+      open_subtitle: false
+      no_disturbance: 0
+      sort_videos: false
+      insert_head: false
+      open_elec: 1
+      is_only_self: 0
+      charging_pay: 0
+      season_id: ~
+      section_title: ~
+      episode_title: ~
+      extra_kwargs: {}
+    # 按输出 dtype 覆盖；键名为 highlight_<outputs.id>。
+    outputs:
+      highlight_all:
+        enabled: true
+      highlight_funny:
+        enabled: true
+
+  clean:
+    # 独立任务输出清理总开关；默认不清理。
+    enabled: false
+    outputs: {}
+
+targets:
+  # 必须与 DMR-*.yml 推导出的直播任务名完全一致。
+  示例直播任务:
+    enabled: true
+  另一个直播任务:
+    enabled: false
+    source:
+      video: dm_video
+      subtitle: available
+    outputs:
+      - id: funny
+        name: 纯搞笑场面
+        categories: [funny]
+        max_clips: 10
+        max_total_duration: 240

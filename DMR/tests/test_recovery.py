@@ -185,6 +185,28 @@ class PipelineRecoveryTests(WorkingDirectoryTestCase):
         self.assertEqual(result[0].target, 'uploader')
         self.assertEqual(result[0].data['files'][0].path, output.path)
 
+    def test_disabled_pipeline_recovery_discards_state_and_outbox(self):
+        config = self._config()
+        source = VideoInfo(
+            path=os.path.abspath('source.mp4'), ctime=datetime.now(), duration=60,
+            group_id='group-1', streamer=StreamerInfo(name='tester'),
+        )
+        event = LiveEvents('demo', config)
+        event.state_dict = {'group-1': [{'src_video': {'status': 'ready', 'file': source, 'wait': []}}]}
+        event._save_state()
+        replay = ReplayTask('demo', config, (queue.Queue(), queue.Queue()))
+        replay._outbox = {'request-1': {'data': {}}}
+        replay._save_outbox()
+
+        config['common_event_args']['recover_pipeline'] = False
+        restored = LiveEvents('demo', config)
+        disabled_replay = ReplayTask('demo', config, (queue.Queue(), queue.Queue()))
+
+        self.assertEqual(restored.state_dict, {})
+        self.assertEqual(disabled_replay._outbox, {})
+        self.assertFalse(os.path.exists(restored.state_file))
+        self.assertFalse(os.path.exists(disabled_replay.outbox_file))
+
     def test_webui_exposes_recovered_pipeline_groups(self):
         event = LiveEvents('demo', self._config())
         video = VideoInfo(

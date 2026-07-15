@@ -142,7 +142,9 @@ class Douyin:
                     uname=name,
                     content=content,
                     dtype='danmaku',
-                    color='ffffff'
+                    color='ffffff',
+                    uid=data.get('user', {}).get('id'),
+                    raw_payload=data,
                 )
                 # msg_dict = {"timestamp": now, "name": name, "content": content, "msg_type": "danmaku", "color": "ffffff"}
                 # print(msg_dict)
@@ -156,7 +158,9 @@ class Douyin:
                     uname=name,
                     content=f"{name}来了",
                     dtype='entry',
-                    color='ffffff'
+                    color='ffffff',
+                    uid=data.get('user', {}).get('id'),
+                    raw_payload=data,
                 )
             elif msg.method == 'WebcastGiftMessage':
                 giftMessage = GiftMessage()
@@ -175,7 +179,9 @@ class Douyin:
                     gift_price=diamondCount,
                     price_unit='抖币',
                     dtype='gift',
-                    color='ffffff'
+                    color='ffffff',
+                    uid=data.get('user', {}).get('id'),
+                    raw_payload=data,
                 )
             else:
                 msg_dict = {"timestamp": now, "name": "", "content": "", "msg_type": "other", "raw_data": msg}
