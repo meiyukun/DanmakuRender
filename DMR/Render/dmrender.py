@@ -25,6 +25,8 @@ class DmRender(BaseRender):
                  extra_inputs:list=None,
                  danmaku_timeline:dict=None,
                  fonts_dir:str=None,
+                 burn_subtitle:bool=False,
+                 subtitle_style:str=None,
                  **kwargs
                  ):
         self.hwaccel_args = hwaccel_args if hwaccel_args is not None else []
@@ -41,6 +43,8 @@ class DmRender(BaseRender):
         self.extra_inputs = extra_inputs if extra_inputs is not None else []
         self.danmaku_timeline = danmaku_timeline if isinstance(danmaku_timeline, dict) else {}
         self.fonts_dir = fonts_dir
+        self.burn_subtitle = burn_subtitle
+        self.subtitle_style = subtitle_style
 
         self.logger = logging.getLogger(__name__)
         self.raw_ffmpeg = RawFFmpegRender(debug=self.debug)
@@ -95,6 +99,20 @@ class DmRender(BaseRender):
                     default_danmaku_filter += fonts_filter_option
                 else:
                     self.logger.warning('ASS字幕字体目录不存在，将只使用系统字体: %s', render_fonts_dir)
+            voice_subtitle_filter = ''
+            if self.burn_subtitle:
+                subtitle_path = os.path.splitext(video_path)[0] + '.srt'
+                if os.path.exists(subtitle_path):
+                    render_subtitle = subtitle_path
+                    if platform.system().lower() == 'windows':
+                        render_subtitle = render_subtitle.replace('\\', '/').replace(':/', '\\:/')
+                    voice_subtitle_filter = ",subtitles=filename='%s'" % render_subtitle
+                    if self.subtitle_style:
+                        escaped_style = str(self.subtitle_style).replace("'", "\\'")
+                        voice_subtitle_filter += ":force_style='%s'" % escaped_style
+                    default_danmaku_filter += voice_subtitle_filter
+                else:
+                    self.logger.warning('未找到语音字幕文件，将只渲染弹幕: %s', subtitle_path)
             timeline_scale_filter = f'scale={output_w}:{output_h}' if self.output_resize else None
             filter_merged = False
             timeline_enabled = self.danmaku_timeline.get('enabled', False)
@@ -111,6 +129,8 @@ class DmRender(BaseRender):
                         subtitle_filter + fonts_filter_option,
                         1,
                     )
+                if voice_subtitle_filter:
+                    filter_str += voice_subtitle_filter
             else:
                 filter_name = '-vf'
                 filter_str = default_danmaku_filter

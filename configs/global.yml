@@ -364,19 +364,42 @@ render_kernel_args:
 
 # 语音转录核心参数
 transcriber_kernel_args:
-  # 指定同时执行的转录任务数，默认1
-  ntranscribers: 1
+  # 同时执行的转录任务数；B站字幕等待时间较长，建议至少为3
+  ntranscribers: 3
 
 # 语音转录默认参数
 transcribe_args:
+  # 转录引擎：xm使用小米转录，bilibili使用B站自动字幕
+  engine: bilibili
   xm:
-    # 小米语音转录认证文件，JSON中需包含 authorization、device_id、app_id
+    # 小米语音转录认证文件；仅engine为xm时使用
     auth_file: .login_info/xm-transcribe.json
+  bilibili:
+    # B站字幕任务的账号名称；cookies为空时读取.login_info/{account}.json
+    account: bilibili
+    # B站登录文件路径；该文件需要包含有效的SESSDATA和bili_jct
+    # cookies: .login_info/bilibili.json
+    # 是否覆盖视频旁已经存在的同名SRT；False会直接复用已有字幕
+    overwrite: True
+    # 是否在SRT旁额外保留B站返回的.subtitle.json原始字幕
+    keep_raw_json: True
+    # 字幕轮询间隔倍率；实际间隔为视频时长乘以该值，并限制在30秒至5分钟
+    poll_interval_ratio: 0.3
+    # 单次上传等待字幕的最长时间（秒）；超过后本分段转录失败
+    poll_timeout: 4000
+    # 稿件可访问但没有字幕时，最多额外重新上传几次；0表示不重传
+    max_reuploads: 2
+    # 触发重传前的等待倍率；实际时间为视频时长乘以该值，并限制在10至60分钟
+    reupload_after_ratio: 0.3
 
 # 渲染器默认参数
 render_args:
   # 弹幕渲染
   dmrender:
+    # 是否等待同名SRT生成并将语音字幕烧录进弹幕版视频
+    burn_subtitle: False
+    # 字幕失败后的渲染策略：continue继续无字幕渲染，skip跳过，fail标记失败
+    subtitle_failure_policy: continue
     # 渲染输出文件夹，默认为在录制输出文件夹后面加上“弹幕版”
     output_dir: ./live/danmu
     # ASS字幕额外字体目录；系统字体无需放入该目录

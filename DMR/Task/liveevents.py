@@ -30,6 +30,13 @@ class LiveEvents(BaseEvents):
                     for info in video_state.values():
                         if isinstance(info.get('file'), dict):
                             info['file'] = video_info_from_dict(info['file'])
+                        if isinstance(info.get('pending_render'), dict):
+                            pending = dict(info['pending_render'])
+                            data = pending.get('data') or {}
+                            if isinstance(data.get('video'), dict):
+                                data['video'] = video_info_from_dict(data['video'])
+                            pending['data'] = data
+                            info['pending_render'] = PipeMessage(**pending)
             loaded_count = len(self.state_dict)
             self._free_state_memory()
             removed_count = loaded_count - len(self.state_dict)
@@ -91,8 +98,8 @@ class LiveEvents(BaseEvents):
             'downloader/livestop': self.onLiveEnd,
             'render/end': self.onRenderEnd,
             'render/error': self.defaultEvent,
-            'transcriber/end': self.defaultEvent,
-            'transcriber/error': self.defaultEvent,
+            'transcriber/end': self.onTranscribeEnd,
+            'transcriber/error': self.onTranscribeError,
             'uploader/end': self.onUploadEnd,
             'uploader/error': self.defaultEvent,
             'cleaner/end': self.defaultEvent,
@@ -123,6 +130,7 @@ class LiveEvents(BaseEvents):
             'src_video': {'status': None, 'file': None, 'wait': []},
             'src_video_pre': {'status': None, 'file': None, 'wait': []},
             'dm_video': {'status': None, 'file': None, 'wait': []},
+            'subtitle': {'status': None, 'file': None, 'wait': [], 'pending_render': None},
         }
         if self.state_dict.get(video.group_id):
             self.state_dict[video.group_id].append(video_state)
@@ -140,9 +148,14 @@ class LiveEvents(BaseEvents):
                     data={
                         'taskname': self.name,
                         'video': video,
-                        'args': self.config['transcribe_args']['xm'],
+                        'engine': self.config['transcribe_args'].get('engine', 'xm'),
+                        'args': self.config['transcribe_args'].get(
+                            self.config['transcribe_args'].get('engine', 'xm'), {}
+                        ),
                     }
                 )
+                self.state_dict[video.group_id][-1]['subtitle']['status'] = 'transcribing'
+                self.state_dict[video.group_id][-1]['subtitle']['wait'].append(transcribe_msg.request_id)
                 ret_msgs.append(transcribe_msg)
             else:
                 self.logger.info(f'{self.name}: 视频 {video.path} 不是本地文件，跳过语音转录.')
@@ -208,12 +221,56 @@ class LiveEvents(BaseEvents):
             )
             self.state_dict[video.group_id][-1]['dm_video']['status'] = 'rendering'
             self.state_dict[video.group_id][-1]['dm_video']['wait'].append(render_msg.request_id)
-            ret_msgs.append(render_msg)
+            wait_subtitle = bool(render_args.get('burn_subtitle')) and bool(
+                self.config['common_event_args'].get('auto_transcribe')
+            )
+            if wait_subtitle:
+                self.state_dict[video.group_id][-1]['dm_video']['status'] = 'waiting_subtitle'
+                self.state_dict[video.group_id][-1]['dm_video']['wait'].remove(render_msg.request_id)
+                self.state_dict[video.group_id][-1]['subtitle']['pending_render'] = render_msg
+            else:
+                ret_msgs.append(render_msg)
 
         if self.config['common_event_args'].get('auto_upload'):
             ret_msgs += self._check_for_upload(video.group_id, len(self.state_dict[video.group_id])-1)
         self._save_state()
         return ret_msgs
+
+    def _finish_transcribe(self, message, succeeded):
+        self.logger.info(f'{self.name}: {message.msg}')
+        ret_msgs = []
+        for video_states in self.state_dict.values():
+            for video_state in video_states:
+                info = video_state.get('subtitle')
+                if not info or message.request_id not in info.get('wait', []):
+                    continue
+                info['wait'].remove(message.request_id)
+                result = message.data if isinstance(message.data, dict) else {}
+                info['file'] = result.get('subtitle')
+                info['status'] = 'ready' if succeeded else 'failed'
+                pending = info.pop('pending_render', None)
+                if pending:
+                    policy = self.config['render_args']['dmrender'].get(
+                        'subtitle_failure_policy', 'continue'
+                    )
+                    if succeeded or policy == 'continue':
+                        video_state['dm_video']['status'] = 'rendering'
+                        video_state['dm_video']['wait'].append(pending.request_id)
+                        ret_msgs.append(pending)
+                    elif policy == 'skip':
+                        video_state['dm_video']['status'] = None
+                    else:
+                        video_state['dm_video']['status'] = 'failed'
+                break
+        self._free_state_memory()
+        self._save_state()
+        return ret_msgs
+
+    def onTranscribeEnd(self, message):
+        return self._finish_transcribe(message, True)
+
+    def onTranscribeError(self, message):
+        return self._finish_transcribe(message, False)
     
     def onLiveEnd(self, message:PipeMessage):
         self.logger.info(f'{self.name}: {message.msg}.')
@@ -400,6 +457,8 @@ class LiveEvents(BaseEvents):
         status = info.get('status')
         if info.get('wait') or status in ('rendering', 'uploading'):
             return True
+        if video_type == 'subtitle':
+            return status in ('transcribing',) or bool(info.get('wait')) or bool(info.get('pending_render'))
         if status == 'ready':
             return (
                 self.config['common_event_args'].get('auto_upload')

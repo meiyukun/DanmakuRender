@@ -66,6 +66,7 @@ class Transcriber:
                 'request_id': msg.request_id,
                 'video': config.get('video'),
                 'args': config.get('args') or {},
+                'engine': config.get('engine', 'xm'),
                 'status': 'waiting',
             }
             self.transcribe_tasks[task['uuid']] = task
@@ -100,15 +101,22 @@ class Transcriber:
         task['status'] = 'transcribing'
         try:
             args = task['args']
-            auth_file = args.get('auth_file')
-            if not auth_file:
-                raise ValueError('未配置 transcribe_args.xm.auth_file')
             video = task.get('video')
             if not video or not getattr(video, 'path', None):
                 raise ValueError('转录任务缺少本地视频路径')
 
-            from .xm import XMTranscriber
-            target_transcriber = XMTranscriber(auth_file=auth_file)
+            engine = task.get('engine', 'xm')
+            if engine == 'xm':
+                auth_file = args.get('auth_file')
+                if not auth_file:
+                    raise ValueError('未配置 transcribe_args.xm.auth_file')
+                from .xm import XMTranscriber
+                target_transcriber = XMTranscriber(auth_file=auth_file)
+            elif engine == 'bilibili':
+                from .bilibili import BilibiliTranscriber
+                target_transcriber = BilibiliTranscriber(**args)
+            else:
+                raise ValueError(f'不支持的转录引擎: {engine}')
             self.logger.info(f'正在转录: {video.path}')
             status, info = target_transcriber.transcribe(video)
             if status:
@@ -124,4 +132,9 @@ class Transcriber:
         if self.recv_queue is not None:
             self.recv_queue.put(PipeMessage(source='transcriber', target='transcriber', event='exit'))
         self.transcribe_executors.shutdown(wait=False)
+        try:
+            from .bilibili import BilibiliTranscriber
+            BilibiliTranscriber.close_all()
+        except Exception as e:
+            self.logger.warning(f'关闭B站字幕上传会话失败: {e}')
         self.logger.info('Transcriber stopped.')

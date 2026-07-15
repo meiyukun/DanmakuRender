@@ -357,19 +357,42 @@ render_kernel_args:
 
 # 语音转录核心参数
 transcriber_kernel_args:
-  # 指定同时执行的转录任务数，默认1
-  ntranscribers: 1
+  # 指定同时执行的转录任务数。B站字幕轮询耗时较长，默认允许3个分段并行等待。
+  ntranscribers: 3
 
 # 语音转录默认参数
 transcribe_args:
+  # 转录引擎，可选 xm、bilibili
+  engine: xm
   xm:
     # 小米语音转录认证文件，JSON中需包含 authorization、device_id、app_id
     auth_file: .login_info/xm-transcribe.json
+  bilibili:
+    # 字幕任务使用的B站账号名称；cookies为空时读取.login_info/{account}.json
+    account: bilibili-subtitle
+    # 字幕任务使用的B站登录文件；为空时按account自动寻找
+    cookies: ~
+    # 是否覆盖原视频旁已经存在的同名SRT；关闭时会直接复用已有字幕
+    overwrite: False
+    # 是否在SRT旁保留B站返回的.subtitle.json原始字幕
+    keep_raw_json: False
+    # 字幕轮询间隔倍率；实际间隔为视频时长乘以该值，并由程序限制在5至60分钟
+    poll_interval_ratio: 0.3
+    # 单次上传等待字幕的最长时间（秒）；超时后本分段转录失败
+    poll_timeout: 86400
+    # 稿件可访问但未生成字幕时，最多额外重新上传几次；0表示不重传
+    max_reuploads: 2
+    # 触发重传前的等待倍率；等待时间为视频时长乘以该值，并由程序限制在10至60分钟
+    reupload_after_ratio: 0.3
 
 # 渲染器默认参数
 render_args:
   # 弹幕渲染
   dmrender:
+    # 是否等待同名SRT生成并将其烧录进视频
+    burn_subtitle: False
+    # 字幕失败时：continue=无字幕继续渲染，skip=跳过渲染，fail=标记失败
+    subtitle_failure_policy: continue
     # 渲染输出文件夹，默认为在录制输出文件夹后面加上“弹幕版”
     output_dir: ~
     # ASS字幕额外字体目录；系统字体无需放入该目录
