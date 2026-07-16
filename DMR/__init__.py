@@ -217,6 +217,18 @@ class DanmakuRender():
             if active_clean_tasks:
                 blocking.append(f'清理任务 {len(active_clean_tasks)} 个')
 
+        active_highlight_statuses = {
+            'preparing', 'waiting_dependencies', 'analyzing', 'rendering',
+            'retry_wait', 'output_ready', 'uploading', 'cleaning',
+        }
+        for task_info in self.engine.task_dict.values():
+            if task_info.get('task_type') != 'highlight':
+                continue
+            jobs = getattr(task_info.get('class'), 'jobs', {})
+            active_jobs = [job for job in jobs.values() if job.get('status') in active_highlight_statuses]
+            if active_jobs:
+                blocking.append(f'热点剪辑任务 {len(active_jobs)} 个')
+
         return len(blocking) == 0, blocking
 
     @staticmethod

@@ -23,6 +23,7 @@ class HighlightTask:
         self.logger = logging.getLogger(f'DMR.HighlightTask.{taskname}')
         self.stoped = True
         self.jobs = {}
+        self.recovered_job_ids = set()
         state_id = hashlib.sha256(taskname.encode('utf-8')).hexdigest()
         self.state_file = os.path.join('.temp', 'highlight_states', f'{state_id}.json')
         self._worker_recv = queue.Queue()
@@ -40,16 +41,51 @@ class HighlightTask:
         try:
             with open(self.state_file, 'r', encoding='utf-8') as file:
                 self.jobs = json.load(file, cls=DateTimeDecoder)
+            self.recovered_job_ids = set(self.jobs)
             for job in self.jobs.values():
                 for segment in job.get('segments', []):
                     if isinstance(segment.get('video'), dict):
                         segment['video'] = video_info_from_dict(segment['video'])
+                    if isinstance(segment.get('source_video'), dict):
+                        segment['source_video'] = video_info_from_dict(segment['source_video'])
+                job['outputs'] = [
+                    video_info_from_dict(output) if isinstance(output, dict) else output
+                    for output in job.get('outputs', [])
+                ]
         except Exception as error:
             self.logger.error('恢复热点任务状态失败: %s', error)
             self.jobs = {}
 
     def _save(self):
         atomic_json_dump(self.jobs, self.state_file)
+
+    def resume_recovered_job(self, job_id):
+        if job_id not in self.recovered_job_ids:
+            return False, '只能恢复本次启动加载的热点任务。'
+        job = self.jobs.get(job_id)
+        if not job:
+            return False, '热点任务记录不存在。'
+        if job.get('status') in ('completed', 'failed'):
+            return False, '热点任务已经结束。'
+        for dependency in job.get('dependencies', {}).values():
+            if dependency.get('status') == 'waiting':
+                dependency['status'] = 'interrupted'
+        job['request_id'] = uuid()
+        job['error'] = None
+        job['retries'] = 0
+        self.recovered_job_ids.discard(job_id)
+        if job.get('status') in ('uploading', 'output_ready') and job.get('outputs'):
+            job['uploads'] = {}
+            self._start_uploads(job_id, job)
+        elif job.get('status') == 'cleaning' and job.get('outputs'):
+            job['cleanups'] = {}
+            job['status'] = 'completed'
+            self._start_clean(job)
+        else:
+            self._dispatch_if_ready(job_id, job)
+        self._save()
+        self.logger.info('已恢复热点任务 %s。', job_id)
+        return True, ''
 
     @staticmethod
     def _processor_config(target):

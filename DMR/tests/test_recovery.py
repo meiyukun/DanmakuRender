@@ -9,6 +9,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from DMR.Render import Render
+from DMR import DanmakuRender
 from DMR.Task.liveevents import LiveEvents
 from DMR.Task.replaytask import ReplayTask
 from DMR.WebService.webapi import WebApi
@@ -238,8 +239,47 @@ class PipelineRecoveryTests(WorkingDirectoryTestCase):
         self.assertEqual(pipelines[0]['taskname'], 'demo')
         self.assertEqual(pipelines[0]['summary'], '处理中')
         self.assertTrue(pipelines[0]['recovered'])
+        self.assertTrue(pipelines[0]['can_resume'])
         self.assertFalse(pipelines[0]['can_delete'])
         self.assertEqual(pipelines[0]['stages'][1]['waiting'], 1)
+
+    def test_resume_recovered_pipeline_replaces_stale_upload_request(self):
+        config = self._config()
+        path = os.path.abspath('rendered.mp4')
+        with open(path, 'wb') as file:
+            file.write(b'video')
+        video = VideoInfo(path=path, ctime=datetime.now(), duration=60, group_id='group-1',
+                          streamer=StreamerInfo(name='tester'), dtype='dm_video')
+        event = LiveEvents('demo', config)
+        event.state_dict = {'group-1': [{
+            'src_video': {'status': 'ready', 'file': video, 'wait': []},
+            'src_video_pre': {'status': None, 'file': None, 'wait': []},
+            'dm_video': {'status': 'uploading', 'file': video, 'wait': ['stale-upload']},
+            'subtitle': {'status': None, 'file': None, 'wait': [], 'pending_render': None},
+        }]}
+        event.ended_dict = {'group-1': time.time()}
+        event.recovered_group_ids = {'group-1'}
+
+        success, reason, messages = event.resume_recovered_pipeline_state('group-1')
+
+        self.assertTrue(success, reason)
+        uploads = [message for message in messages if message.target == 'uploader']
+        self.assertEqual(1, len(uploads))
+        self.assertNotEqual('stale-upload', uploads[0].request_id)
+        self.assertNotIn('group-1', event.recovered_group_ids)
+
+    def test_highlight_job_blocks_idle_restart(self):
+        runtime = DanmakuRender.__new__(DanmakuRender)
+        highlight = SimpleNamespace(jobs={'source:group': {'status': 'analyzing'}})
+        runtime.engine = SimpleNamespace(
+            plugin_dict={},
+            task_dict={'highlight/Highlight': {'task_type': 'highlight', 'class': highlight}},
+        )
+
+        idle, blocking = runtime._get_idle_status()
+
+        self.assertFalse(idle)
+        self.assertEqual(['热点剪辑任务 1 个'], blocking)
 
     def test_deleting_recovered_pipeline_state_removes_persisted_record(self):
         event = LiveEvents('demo', self._config())

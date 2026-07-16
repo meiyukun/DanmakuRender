@@ -164,3 +164,10 @@ class ReplayTask():
     def stop(self):
         self.stoped = True
         self._event_dict.clear()
+
+    def resume_recovered_pipeline(self, group_id):
+        success, reason, messages = self.event_class.resume_recovered_pipeline_state(group_id)
+        if success:
+            for message in messages:
+                self._pipeSend(message)
+        return success, reason

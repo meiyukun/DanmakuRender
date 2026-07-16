@@ -138,6 +138,35 @@ class WebApi:
 
             return {'status': 'success', 'deleted': deleted, 'skipped': skipped}
 
+        @app.route('/api/pipeline_states/resume_batch', methods=['POST'])
+        @self.login_required
+        def pipeline_states_resume_batch():
+            payload = request.get_json(silent=True) or {}
+            items = payload.get('items')
+            if not isinstance(items, list) or not items:
+                return {'status': 'error', 'message': '请选择要恢复的流水线记录。'}, 400
+            resumed, skipped = [], []
+            for item in items:
+                taskname = item.get('taskname') if isinstance(item, dict) else None
+                task_type = item.get('task_type', 'replay') if isinstance(item, dict) else 'replay'
+                recovery_id = item.get('recovery_id') or item.get('group_id') if isinstance(item, dict) else None
+                task_info = self.engine.task_dict.get(f'{task_type}/{taskname}') if self.engine else None
+                task = task_info.get('class') if task_info else None
+                if task_type == 'highlight' and task:
+                    success, reason = task.resume_recovered_job(recovery_id)
+                elif task:
+                    success, reason = task.resume_recovered_pipeline(recovery_id)
+                else:
+                    success, reason = False, '任务不存在。'
+                result = {'taskname': taskname, 'task_type': task_type, 'group_id': item.get('group_id'),
+                          'recovery_id': recovery_id}
+                if success:
+                    resumed.append(result)
+                else:
+                    result['reason'] = reason
+                    skipped.append(result)
+            return {'status': 'success', 'resumed': resumed, 'skipped': skipped}
+
         @app.route('/api/restart/status')
         @self.login_required
         def restart_status_api():
@@ -526,8 +555,11 @@ class WebApi:
                         pipeline_states.append({
                             'taskname': task_info.get('name', task_key.split('/', 1)[-1]),
                             'task_type': 'highlight', 'group_id': job.get('group_id', job_id),
+                            'recovery_id': job_id,
                             'ended': job.get('status') in ('completed', 'failed'),
-                            'recovered': True, 'active_count': 1 if job.get('status') in ('analyzing', 'rendering', 'uploading') else 0,
+                            'recovered': job_id in getattr(highlight_task, 'recovered_job_ids', set()),
+                            'can_resume': job_id in getattr(highlight_task, 'recovered_job_ids', set()) and job.get('status') not in ('completed', 'failed'),
+                            'active_count': 1 if job.get('status') in ('preparing', 'waiting_dependencies', 'analyzing', 'rendering', 'retry_wait', 'output_ready', 'uploading', 'cleaning') else 0,
                             'ready_count': len(job.get('outputs') or []),
                             'segment_count': len(job.get('segments') or []),
                             'can_delete': False, 'summary': job.get('status'),
@@ -576,10 +608,13 @@ class WebApi:
                         summary = '直播进行中'
                     pipeline_states.append({
                         'taskname': taskname,
+                        'task_type': 'replay',
                         'group_id': group_id,
+                        'recovery_id': group_id,
                         'segment_count': len(video_states),
                         'ended': ended,
                         'recovered': group_id in recovered_groups,
+                        'can_resume': group_id in recovered_groups,
                         'can_delete': group_id in recovered_groups and active_count == 0,
                         'summary': summary,
                         'stages': stages,

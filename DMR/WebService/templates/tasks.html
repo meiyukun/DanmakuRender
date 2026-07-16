@@ -5,6 +5,7 @@
     <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
         <h2>流水线恢复状态</h2>
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="button" onclick="resumeSelectedPipelineStates()">恢复选中</button>
             <button type="button" onclick="deleteSelectedPipelineStates()" style="background-color: #dc3545; color: white;">删除选中</button>
             <button type="button" onclick="deleteAllPipelineStates()" style="background-color: #dc3545; color: white;">全部删除</button>
         </div>
@@ -25,13 +26,13 @@
             <tbody>
                 {% for pipeline in pipeline_states %}
                 <tr>
-                    <td><input type="checkbox" class="pipeline-state-checkbox" {% if not pipeline.can_delete %}disabled title="仍有处理中的任务，不能删除"{% endif %} onchange="setPipelineSelectedByIndex({{ loop.index0 }}, this.checked)"></td>
+                    <td><input type="checkbox" class="pipeline-state-checkbox" {% if not pipeline.can_delete and not pipeline.can_resume %}disabled title="当前记录不能操作"{% endif %} onchange="setPipelineSelectedByIndex({{ loop.index0 }}, this.checked)"></td>
                     <td>{{ pipeline.taskname }}</td>
                     <td>{{ pipeline.group_id }}（{{ pipeline.segment_count }} 段）</td>
                     <td>{{ '重启恢复' if pipeline.recovered else '本次运行' }}</td>
                     <td>{{ pipeline.summary }}</td>
                     <td>
-                        <details>
+                        <details id="details-{{ loop.index0 }}">
                         <summary>查看 {{ pipeline.stages|length }} 个阶段</summary>
                         {% for stage in pipeline.stages %}
                         <div>{{ stage.type }}：{{ stage.status }}{% if stage.file %} · {{ stage.file }}{% endif %}{% if stage.waiting %} · 等待 {{ stage.waiting }} 个任务{% endif %}</div>
@@ -221,12 +222,12 @@
     let currentFailedUploadIds = {{ failed_tasks|map(attribute='uuid')|list|tojson }};
 
     function pipelineStateKey(pipeline) {
-        return `${pipeline.taskname}\u0000${pipeline.group_id}`;
+        return `${pipeline.task_type || 'replay'}\u0000${pipeline.taskname}\u0000${pipeline.recovery_id || pipeline.group_id}`;
     }
 
     function setPipelineSelectedByIndex(index, checked) {
         const pipeline = currentPipelineStates[index];
-        if (!pipeline || !pipeline.can_delete) return;
+        if (!pipeline || (!pipeline.can_delete && !pipeline.can_resume)) return;
         const key = pipelineStateKey(pipeline);
         if (checked) selectedPipelineStates.add(key);
         else selectedPipelineStates.delete(key);
@@ -234,7 +235,7 @@
 
     function toggleAllPipelineStates(checked) {
         currentPipelineStates.forEach(pipeline => {
-            if (!pipeline.can_delete) return;
+            if (!pipeline.can_delete && !pipeline.can_resume) return;
             const key = pipelineStateKey(pipeline);
             if (checked) selectedPipelineStates.add(key);
             else selectedPipelineStates.delete(key);
@@ -269,8 +270,36 @@
     }
 
     function deleteSelectedPipelineStates() {
-        const items = currentPipelineStates.filter(pipeline => selectedPipelineStates.has(pipelineStateKey(pipeline)));
+        const items = currentPipelineStates.filter(pipeline =>
+            pipeline.can_delete && selectedPipelineStates.has(pipelineStateKey(pipeline))
+        );
         deletePipelineStates(items);
+    }
+
+    function resumeSelectedPipelineStates() {
+        const items = currentPipelineStates.filter(pipeline =>
+            pipeline.can_resume && selectedPipelineStates.has(pipelineStateKey(pipeline))
+        );
+        if (!items.length) {
+            alert('请选择可恢复的流水线记录。');
+            return;
+        }
+        fetch('/api/pipeline_states/resume_batch', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({items}),
+        }).then(response => response.json()).then(data => {
+            if (data.status !== 'success') {
+                alert('恢复失败: ' + data.message);
+                return;
+            }
+            data.resumed.forEach(item => {
+                selectedPipelineStates.delete(`${item.task_type || 'replay'}\u0000${item.taskname}\u0000${item.recovery_id || item.group_id}`);
+            });
+            if (data.skipped.length) {
+                alert(data.skipped.map(item => `${item.taskname}/${item.group_id}: ${item.reason}`).join('\n'));
+            }
+            refreshTasks();
+        }).catch(error => console.error('Error:', error));
     }
 
     function deleteAllPipelineStates() {
@@ -434,18 +463,22 @@
                             return `<div>${escapeHtml(stage.type)}：${escapeHtml(stage.status)}${file}${waiting}</div>`;
                         }).join('');
                         const checked = selectedPipelineStates.has(pipelineStateKey(pipeline)) ? 'checked' : '';
-                        const disabled = pipeline.can_delete ? '' : 'disabled title="仍有处理中的任务，不能删除"';
+                        const disabled = (pipeline.can_delete || pipeline.can_resume) ? '' : 'disabled title="当前记录不能操作"';
                         html += `<tr>
                             <td><input type="checkbox" class="pipeline-state-checkbox" ${checked} ${disabled} onchange="setPipelineSelectedByIndex(${index}, this.checked)"></td>
                             <td>${escapeHtml(pipeline.taskname)}</td>
                             <td>${escapeHtml(pipeline.group_id)}（${pipeline.segment_count} 段）</td>
                             <td>${pipeline.recovered ? '重启恢复' : '本次运行'}</td>
                             <td>${escapeHtml(pipeline.summary)}</td>
-                            <td><details><summary>查看 ${pipeline.stages.length} 个阶段</summary>${stages}</details></td>
+                            <td><details id="details-${index}"><summary>查看 ${pipeline.stages.length} 个阶段</summary>${stages}</details></td>
                         </tr>`;
                     });
                     html += '</tbody></table>';
                     pipelineDiv.innerHTML = html;
+                    openDetails.forEach(id => {
+                        const details = document.getElementById(id);
+                        if (details) details.open = true;
+                    });
                 } else {
                     currentPipelineStates = [];
                     selectedPipelineStates.clear();

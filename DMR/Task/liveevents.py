@@ -100,6 +100,71 @@ class LiveEvents(BaseEvents):
         self.logger.info(f'{self.name}: 已删除恢复流水线记录 {group_id}，未删除视频文件.')
         return True, ''
 
+    def resume_recovered_pipeline_state(self, group_id):
+        """Reconcile stale request ids and rebuild pending work after a restart."""
+        if group_id not in self.recovered_group_ids:
+            return False, '只能恢复本次启动加载的流水线记录。', []
+        video_states = self.state_dict.get(group_id)
+        if not video_states:
+            return False, '流水线记录不存在。', []
+
+        messages = []
+        for index, video_state in enumerate(video_states):
+            for video_type, info in video_state.items():
+                info['wait'] = []
+                if video_type == 'subtitle':
+                    info.pop('pending_render', None)
+                if info.get('status') not in ('rendering', 'waiting_subtitle', 'transcribing', 'uploading'):
+                    continue
+                file_info = info.get('file')
+                path = file_info if isinstance(file_info, str) else getattr(file_info, 'path', None)
+                info['status'] = 'ready' if path and os.path.exists(path) else None
+
+            source = video_state.get('src_video', {})
+            source_file = source.get('file')
+            if not source_file or not getattr(source_file, 'path', None) or not os.path.exists(source_file.path):
+                source_pre = video_state.get('src_video_pre', {}).get('file')
+                if source_pre and getattr(source_pre, 'path', None) and os.path.exists(source_pre.path):
+                    source.update({'status': 'ready', 'file': source_pre, 'wait': []})
+                    source_file = source_pre
+            if not source_file or not os.path.exists(source_file.path):
+                continue
+
+            subtitle = video_state.get('subtitle', {})
+            if self.config['common_event_args'].get('auto_transcribe') and subtitle.get('status') is None:
+                request_id = uuid()
+                args = self.config.get('transcribe_args', {})
+                engine = args.get('engine', 'xm')
+                messages.append(PipeMessage(
+                    source=self.name, target='transcriber', event='newtask', request_id=request_id,
+                    data={'taskname': self.name, 'video': source_file, 'engine': engine,
+                          'args': args.get(engine, {})},
+                ))
+                subtitle.update({'status': 'transcribing', 'wait': [request_id]})
+
+            dm_video = video_state.get('dm_video', {})
+            if self.config['common_event_args'].get('auto_render') and dm_video.get('status') is None:
+                args = self.config.get('render_args', {}).get('dmrender', {})
+                if args.get('output_name'):
+                    filename = replace_keywords(args['output_name'], source_file, replace_invalid=True) + f".{args.get('format', 'mp4')}"
+                else:
+                    filename = os.path.splitext(os.path.basename(source_file.path))[0] + f"（弹幕版）.{args.get('format', 'mp4')}"
+                output_dir = args.get('output_dir') or os.path.dirname(source_file.path) + '（弹幕版）'
+                request_id = uuid()
+                messages.append(PipeMessage(
+                    source=self.name, target='render', event='newtask', request_id=request_id,
+                    data={'taskname': self.name, 'mode': 'dmrender', 'video': source_file,
+                          'output': os.path.join(output_dir, filename), 'args': args},
+                ))
+                dm_video.update({'status': 'rendering', 'wait': [request_id]})
+
+        if group_id in self.ended_dict and self.config['common_event_args'].get('auto_upload'):
+            messages.extend(self._check_for_upload(group_id))
+        self.recovered_group_ids.discard(group_id)
+        self._save_state()
+        self.logger.info('%s: 已恢复视频组流水线 %s，重新投递 %d 个任务。', self.name, group_id, len(messages))
+        return True, '', messages
+
     @property
     def event_dict(self):
         return {
