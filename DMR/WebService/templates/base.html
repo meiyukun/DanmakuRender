@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DanmakuRender 5</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block extra_head %}{% endblock %}
 </head>
 <body>
     <header>
@@ -13,6 +14,7 @@
             <div class="nav-links">
                 <a href="{{ url_for('index') }}">概况</a>
                 <a href="{{ url_for('tasks_page') }}">任务</a>
+                <a href="{{ url_for('highlights_page') }}">热点剪辑</a>
                 <a href="{{ url_for('config_list') }}">配置</a>
                 <a href="{{ url_for('logout') }}" style="color: #ff6b6b;">退出</a>
             </div>
@@ -30,5 +32,6 @@
         {% endwith %}
         {% block content %}{% endblock %}
     </div>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

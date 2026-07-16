@@ -260,7 +260,13 @@ class Uploader():
             target=task['source'],
             request_id=task['request_id'],
             dtype='dict',
-            data={},
+            data={
+                'result': task.get('completion_result'),
+                'engine': task.get('engine'),
+                'account': (task.get('args') or {}).get('account'),
+                'upload_group': task.get('upload_group'),
+                'files': [getattr(file, 'path', None) for file in task.get('files', [])],
+            },
         )
 
     def _ack_task(self, request_id):

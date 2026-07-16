@@ -1,30 +1,35 @@
 # 全局热点剪辑配置示例。实际使用时复制为一个 DMH-*.yml 文件。
 # 整个程序只加载一份 DMH 配置；defaults 供所有直播任务共用，targets 提供逐任务覆盖。
 # 热点任务等待整场直播结束后，一次性按分段顺序分析该场直播的全部录制分段。
+# 常见术语：基线=平时正常弹幕密度；峰值=弹幕突然变多的最高点；边界=最终片段的起止位置。
+# 配置类型固定为 highlight，不可改成直播任务类型。
 task_type: highlight
 
 runtime:
   # 同时处理的整场直播数；视频编码较占资源，建议从 1 开始。
   max_workers: 1
-  # 单个任务失败后的重试次数与间隔（秒）。
+  # 单个任务分析或编码失败后的最大重试次数；0表示不重试。
   retry_count: 1
+  # 两次重试之间的等待时间，单位秒。
   retry_interval: 60
+
+# Web 手动剪辑向所有录制任务开放：targets.enabled 只控制自动订阅。
+# 未写入 targets 的录制任务使用 defaults；手动上传必须每次显式确认。
+# Web 可扫描 download_args.output_dir 中的旧录像，自动分组后允许手动勾选分段。
 
 # 所有 targets 共用的默认配置；目标内同名字段会递归覆盖，列表整体替换，~ 表示清空。
 defaults:
   source:
     # src_video 使用无弹幕原版；dm_video 使用已渲染弹幕的视频。
     video: src_video
-    # auto 优先原始 JSONL，缺失时回退 ASS；也可设 raw 或 ass。
+    # auto优先原始JSONL（每行一条完整弹幕记录），缺失时回退ASS（渲染弹幕字幕文件）；也可设raw或ass。
     danmaku: auto
     # 原始记录中参与分析的消息类型；完整原始记录不会因此丢字段。
     danmaku_types: [danmaku, emoticon]
-    # disabled 不用字幕；available 只用已有字幕；prefer 等待后可降级；required 超时即失败。
-    subtitle: prefer
+    # disabled不用字幕；available只用本地或场次已记录的字幕且不等待；prefer尝试生成并在超时后降级；required超时即失败。
+    subtitle: available
     # 等待字幕或预处理产物的最长时间（秒）。
     subtitle_timeout: 10800
-    # 优先复用直播任务已经生成的弹幕视频和字幕。
-    reuse_existing: true
     # 小于该时长的异常/收尾碎片不参与热点分析和剪辑，单位秒；设为0关闭过滤。
     min_segment_duration: 30
 
@@ -32,77 +37,164 @@ defaults:
     # 缺少 dm_video 时使用的完整渲染参数；字段格式与 render_args.dmrender 一致。
     dmrender: {}
     # 缺少字幕且策略要求生成时使用的完整转录参数；字段格式与 transcribe_args 一致。
-    transcribe: {}
+    # 若场次记录了已上传B站稿件，会先按BVID（B站视频编号）和分P标题复用字幕；失败后再上传低画质代理视频获取字幕。
+    transcribe:
+      # 字幕生成引擎；bilibili 会通过已有稿件或字幕代理视频取得平台字幕。
+      engine: bilibili
+      bilibili:
+        # B站账号名称，对应 .login_info/<account>.json；也可改用 cookies 指定文件。
+        account: bilibili
+        # 尝试从已上传稿件读取字幕的最长时间，单位秒；失败后回退代理视频流程。
+        existing_upload_timeout: 300
 
   analysis:
     detection:
+      # 寻找候选波峰前，把相邻几秒弹幕密度加权平均（高斯平滑）的范围；越大曲线越平缓。
       peak_smoothing_seconds: 5
+      # 定位热点起涨和回落边界时的平滑尺度，单位秒；通常小于波峰尺度。
       boundary_smoothing_seconds: 2
+      # 计算局部基线的前后搜索范围；基线就是该时段平时正常的弹幕密度，单位秒。
       baseline_radius_seconds: 120
+      # 计算基线时排除峰值中心附近的范围，单位秒，避免热点抬高自身基线。
       baseline_exclusion_seconds: 30
+      # 向峰值两侧寻找低点的最远距离，用来判断该峰比周围凸出多少，单位秒。
       prominence_search_seconds: 180
+      # 峰值前后约11秒内成为候选所需的最少有效弹幕数。
       min_peak_messages: 8
+      # 峰值必须比正常密度高出多少个“常见波动幅度”；这里的Z分数越高，筛选越严格。
+      # MAD是“各秒密度偏离中间值的典型幅度”，不容易被极端高峰干扰，用来衡量平时波动大小。
       min_peak_z: 3.0
+      # 峰值比两侧低点凸出的幅度，至少应达到正常密度的多少倍；越大越只保留明显高峰。
       min_prominence_ratio: 1.0
+      # 是否强制候选包含“哈哈、问号、帅、666、表情”等同步反应信号。
       require_reaction_signal: true
+      # 候选片段内同步反应弹幕的最少条数。
       reaction_min_count: 5
+      # 同步反应弹幕占候选全部弹幕的最低比例。
       reaction_min_ratio: 0.18
+      # 单个主导反应类别占候选全部弹幕的最低比例。
       dominant_reaction_min_ratio: 0.10
+      # 普通文本超过该字符数后不按短时即时反应识别；命名表情仍可单独识别。
       reaction_max_chars: 16
+      # 统计短弹幕比例时使用的最大字符数。
       short_message_chars: 8
+      # 普通文本达到该长度后计入长句讨论特征。
       discussion_min_chars: 12
+      # 长句讨论比例超过该值时拒绝候选，避免把集中聊天误判为高能。
       discussion_max_ratio: 0.75
+      # 同步反应强度对候选排序分数的加权系数。
       reaction_score_weight: 1.5
+      # 边界线至少设为“正常密度 + 几个平时波动幅度”；MAD就是上述不易受极端值影响的波动大小。
+      # 程序会与下面按峰高计算的阈值比较，并采用更严格（更高）的那个。
       boundary_threshold_mad: 1.0
+      # 边界阈值使用峰值增量的比例；越低边界越宽，但更容易包含低能内容。
       boundary_threshold_ratio: 0.50
-      boundary_quiet_seconds: 3
+      # 边界曲线连续低于阈值多少秒才认为离开热点，避免短暂凹陷误切宽峰。
+      boundary_quiet_seconds: 4
+      # 从首尾峰向外寻找事件包络边界的最大距离，单位秒。
       boundary_search_seconds: 60
-      pre_roll_seconds: 5
+      # 从事件主体起点向前保留的总时间，单位秒；同时用于补偿观众发弹幕的延迟和保留内容铺垫。
+      pre_roll_seconds: 10
+      # 把事件内“超过正常密度的弹幕”从前到后累加，累计到5%时作为主体起点，可跳过少量前置噪声。
+      boundary_start_quantile: 0.05
+      # 累计到92%时作为主体终点，因此最后约8%的低强度缓慢回落不会进入成片。
+      boundary_end_quantile: 0.92
+      # 热点主体结束后额外保留的收尾时间，单位秒。
       post_roll_seconds: 2
-      peak_merge_max_gap_seconds: 30
-      peak_merge_valley_ratio: 0.35
+      # 相邻峰最多相隔多少秒仍可能属于同一宽峰事件。
+      peak_merge_max_gap_seconds: 45
+      # 两个峰之间的密度降到“正常密度至较弱峰高度”这段差值的多少比例时，才算接近平时水平。
+      # 数值越低，越不容易判定已经回归平静，因此越容易把次峰并入同一事件。
+      peak_merge_valley_ratio: 0.25
+      # 峰间曲线必须连续接近基线这么久，才拆成两个独立事件。
+      peak_merge_quiet_seconds: 6
+      # 单个候选片段的最短时长，单位秒；不足时会向两侧补齐。
       min_clip_seconds: 10
+      # 单个候选片段的最长时长，单位秒；超出时优先保留起点并裁掉尾部。
       max_clip_seconds: 45
+      # 超宽事件的峰超出最大时长时，峰在成片中的最晚相对位置；0.65表示至少留约65%前置空间。
+      max_clip_peak_position_ratio: 0.65
+      # 福袋、口令等持续重复文本检测使用的时间桶长度，单位秒。
       campaign_bucket_seconds: 5
+      # 同一重复文本至少持续该时长才按福利互动过滤，单位秒。
       campaign_min_duration: 120
+      # 同一非反应文本在时间桶内达到该占比时视为主导口令。
       campaign_dominant_ratio: 0.35
     ai:
-      # AI 只接收候选区间内的“时间+文本”，不发送昵称、用户 ID 或弹幕类型。
+      # AI（人工智能模型）只接收候选区间内的“时间+文本”，不发送昵称、用户ID或弹幕类型。
+      # 是否启用AI复核；关闭时完全使用本地密度和反应算法。
       enabled: false
+      # AI服务接口地址；使用OpenAI通用调用格式，末尾不要填写 /v1/chat/completions。
       base_url: ''
+      # 优先读取AI服务访问密钥（类似登录密码）的环境变量名称，建议避免在文件中明文保存。
       api_key_env: DMR_HIGHLIGHT_API_KEY
+      # 环境变量不存在时使用的备用密钥；示例保持为空。
       api_key: ''
+      # AI复核使用的模型名称，必须由所配置接口支持。
       model: gpt-5.4
+      # 单次AI请求的网络超时时间，单位秒。
       timeout: 120
+      # 每次AI请求一起复核的候选片段数量；越大越省请求但输入更长。
       batch_size: 8
+      # AI决定保留候选所需的最低置信度。
       min_confidence: 0.65
+      # 单次AI回答的最大长度；token是模型计量文字长度的单位，一个汉字通常会占一个或多个token。
       max_tokens: 1800
+      # 自定义系统提示词；~ 表示使用程序内置的热点审核和福利过滤提示词。
       system_prompt: ~
 
   encoding:
+    # 优先使用 copy 直接复制原视频流，只做关键帧裁切和拼接，速度最快且画质不变；reencode 表示始终重新编码。
+    mode: copy
+    # copy 模式遇到分段编码、分辨率或音轨参数不一致时，自动整场回退重新编码，避免混用两种片段导致无法拼接。
+    copy_fallback: reencode
+    # outward 表示片段起点向前、终点向后对齐到关键帧，确保无重编码时不丢热点画面，但成片可能多出几秒。
+    keyframe_alignment: outward
+    # 保存每个审核通过的小片段，供 Web 预览、删除、调整顺序和重新拼接；默认永久保留，需用户手动删除。
+    keep_clips: true
     # 为空时在源视频旁创建按热点任务隔离的输出目录。
     output_dir: ~
+    # 成片封装格式，常用 mp4 或 mkv。
     format: mp4
+    # 单独指定FFmpeg（负责裁剪、转码和拼接视频的程序）路径；~ 表示使用全局工具路径。
     ffmpeg: ~
+    # 视频编码器；可按环境改为 h264_nvenc、h264_qsv 等硬件编码器。
     vencoder: libx264
+    # 视频编码参数；libx264下CRF是画质档位，数值越小画质越高、文件越大。
     vencoder_args: [-crf, '26', -preset, medium]
+    # 音频编码器。
     aencoder: aac
+    # 音频编码器参数，此处使用192kbps码率。
     aencoder_args: [-b:a, 192k]
+    # 统一输出帧率，避免不同录制分段参数不一致影响拼接。
     output_fps: 60
+    # 统一输出分辨率，如 1920x1080；~ 表示沿用首段视频。
     output_resolution: ~
 
   outputs:
+    # 列表项表示要纳入同一份混剪的类别选择，不再逐项生成多个视频；同时选择多项会合并类别并统一排序筛选。
     - id: all
+      # 方案显示名称，并参与默认成片文件名生成。
       name: 综合高能
+      # 允许的热点类别；'*'表示全部，也可填 funny、skill、absurd、fail 等。
       categories: ['*']
+      # all 的数量和总时长作为所有已选类别合并后的统一上限。
       max_clips: 12
+      # 该混剪允许的总时长上限，单位秒。
       max_total_duration: 300
+      # 自定义输出文件名；~ 表示使用源文件名和方案名自动生成。
       output_name: ~
+    # 仅保留本地或AI分类为 funny 的热点。
     - id: funny
+      # 第二个输出方案的显示名称。
       name: 纯搞笑场面
+      # 本方案只接受搞笑类别。
       categories: [funny]
+      # 搞笑混剪最多选择的片段数。
       max_clips: 8
+      # 搞笑混剪总时长上限，单位秒。
       max_total_duration: 180
+      # 自定义搞笑混剪文件名；~ 表示自动生成。
       output_name: ~
 
   upload:
@@ -110,62 +202,106 @@ defaults:
     enabled: false
     # 上传通用参数，格式与 upload_args 的单个上传项一致。
     common:
+      # 上传引擎，热点任务默认使用 biliwebapi。
       engine: biliwebapi
+      # 账号名称，用于选择登录文件和上传任务锁。
       account: bilibili
+      # 显式指定包含登录凭证（Cookie）的文件；~ 表示按account从.login_info中查找。
       cookies: ~
+      # 同一个热点任务的多个上传是否串行执行，避免稿件操作冲突。
       task_upload_lock: true
+      # 投稿失败后的重试次数。
       retry: 3
+      # 单次上传超时，单位秒；0表示不限制。
       timeout: 0
+      # 是否按录制过程实时上传；热点成片已完整生成，应保持 false。
       realtime: false
+      # 是否把多个输入文件作为同一投稿的连续分P；热点输出通常逐方案上传。
       concat_video: false
+      # 允许上传的最短视频时长，单位秒；0表示不限制。
       min_length: 0
+      # 上传线路；~ 表示由上传引擎自动选择。
       line: ~
+      # 上传分片或线程并发限制，具体含义由上传引擎决定。
       limit: 3
+      # 投稿类型：1=自制，2=转载。
       copyright: 1
+      # 转载来源；copyright=2时按平台要求填写。
       source: ''
+      # B站投稿分区ID，应按直播内容调整。
       tid: 21
+      # 封面路径或封面生成配置；~ 表示不单独指定。
       cover: ~
+      # 投稿标题模板，支持 SOURCE_TASK、HIGHLIGHT_TASK 等任务关键字。
       title: '{SOURCE_TASK} 高能混剪'
+      # 投稿简介。
       desc: ''
+      # 投稿同时发布的动态文字。
       dynamic: ''
+      # 投稿标签，使用英文逗号分隔。
       tag: '直播回放,高能混剪'
+      # 是否启用杜比相关投稿参数，0表示关闭。
       dolby: 0
+      # 是否声明高解析度音频（Hi-Res）相关投稿参数，0表示关闭。
       hires: 0
+      # 是否允许平台字幕协作。
       open_subtitle: false
+      # 是否开启无打扰投稿选项。
       no_disturbance: 0
+      # 是否按文件名排序投稿分P。
       sort_videos: false
+      # 向已有稿件追加分P时，是否插入列表头部。
       insert_head: false
+      # 是否开启充电入口，具体支持情况由账号和上传引擎决定。
       open_elec: 1
+      # 是否设为仅自己可见；0为正常可见性流程。
       is_only_self: 0
+      # 是否设置为充电专属视频，0表示关闭。
       charging_pay: 0
+      # 要加入的B站合集ID；~ 表示不加入合集。
       season_id: ~
+      # 合集中的小节标题；未配置合集时留空。
       section_title: ~
+      # 合集内单集标题；未配置合集时留空。
       episode_title: ~
+      # 直接传递给上传引擎的其他扩展参数。
       extra_kwargs: {}
-    # 按输出 dtype 覆盖；键名为 highlight_<outputs.id>。
+    # 按输出类型编号覆盖上传参数；类型编号固定为highlight_<outputs.id>。
     outputs:
       highlight_all:
+        # 上传总开关开启后，是否上传综合高能方案。
         enabled: true
       highlight_funny:
+        # 上传总开关开启后，是否上传纯搞笑方案。
         enabled: true
 
   clean:
     # 独立任务输出清理总开关；默认不清理。
     enabled: false
+    # 按 highlight_<id> 或 all 配置 method、delay、dest 等清理参数。
     outputs: {}
 
 targets:
   # 必须与 DMR-*.yml 推导出的直播任务名完全一致。
   示例直播任务:
+    # true自动订阅该直播任务的整场结束事件；false仍可在Web中手动剪辑。
     enabled: true
   另一个直播任务:
+    # 此任务仅作为覆盖示例，不自动进行热点剪辑。
     enabled: false
     source:
+      # 为该任务覆盖素材类型，使用已渲染弹幕的视频。
       video: dm_video
+      # 只分析已经存在的字幕，不主动等待或生成。
       subtitle: available
     outputs:
+      # targets中的列表会整体替换defaults.outputs，而不是追加。
       - id: funny
+        # 覆盖后的输出方案名称。
         name: 纯搞笑场面
+        # 只选择搞笑类别。
         categories: [funny]
+        # 本任务最多选择10个搞笑片段。
         max_clips: 10
+        # 本任务搞笑混剪最长240秒。
         max_total_duration: 240

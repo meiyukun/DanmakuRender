@@ -44,6 +44,38 @@ class BilibiliTranscriber:
             upload = self._upload_config()
             self._validate_cookie_file(upload)
             duration = self._duration(video)
+            existing = self.config.get('existing_upload') or {}
+            if existing.get('bvid') and existing.get('part_title'):
+                existing_uploader = BiliWebApi(
+                    cookies=upload.get('cookies'), account=upload.get('account'),
+                    limit=upload.get('limit', 3),
+                )
+                previous_timeout = self.config.get('poll_timeout')
+                self.config['poll_timeout'] = max(
+                    float(self.config.get('existing_upload_timeout', 300)), 1
+                )
+                try:
+                    self.session.cookies.update(existing_uploader._session.cookies)
+                    subtitle_data, aid, cid = self._wait_for_subtitle(
+                        existing['bvid'], existing['part_title'], duration, self.session,
+                    )
+                    if self.config.get('keep_raw_json', False):
+                        self._atomic_json_dump(subtitle_data, raw_output)
+                    self._atomic_write(output, self._to_srt(subtitle_data))
+                    return True, {
+                        'subtitle': output,
+                        'raw_subtitle': raw_output if self.config.get('keep_raw_json', False) else None,
+                        'bvid': existing['bvid'], 'aid': aid, 'cid': cid,
+                        'upload_attempts': 0, 'reused_existing_upload': True,
+                    }
+                except Exception as error:
+                    logger.info('已上传稿件暂未取得字幕，将回退字幕代理视频: %s', error)
+                finally:
+                    if previous_timeout is None:
+                        self.config.pop('poll_timeout', None)
+                    else:
+                        self.config['poll_timeout'] = previous_timeout
+                    existing_uploader.stop()
             uploader, upload_lock, pooled = self._get_uploader(upload, video)
             max_reuploads = max(int(self.config.get('max_reuploads', 2)), 0)
             subtitle_data = aid = cid = bvid = None

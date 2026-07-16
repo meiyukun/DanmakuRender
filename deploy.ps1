@@ -24,6 +24,20 @@ function Invoke-Checked($File, [string[]]$Arguments) {
     }
 }
 
+function Invoke-CheckedRetry($File, [string[]]$Arguments, [int]$Attempts = 3, [int]$DelaySeconds = 3) {
+    for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
+        & $File @Arguments
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        if ($attempt -lt $Attempts) {
+            Write-Warning "Command failed (attempt $attempt/$Attempts), retrying in $DelaySeconds seconds: $File"
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    Fail "Command failed after $Attempts attempts with exit code ${LASTEXITCODE}: $File $($Arguments -join ' ')"
+}
+
 if (-not (Test-Path ".git")) {
     Fail "Current directory is not a git repository. Run this script from the project root."
 }
@@ -95,18 +109,28 @@ try {
         $quotedBranchRef = Quote-Bash $branchRef
 
         try {
-            Invoke-Checked "scp" @($localBundle, "$($server.Host):$remoteBundle")
+            Invoke-CheckedRetry "scp" @($localBundle, "$($server.Host):$remoteBundle")
 
             # Fetch and verify the uploaded bundle before touching the working tree.
             # If either command fails, reset/clean are not reached and the current
             # server checkout remains intact.
             $remoteCommand = "set -e; cd $remoteDir; git fetch $quotedBundle $quotedBranchRef; git reset --hard FETCH_HEAD; git clean -fd"
-            Invoke-Checked "ssh" @($server.Host, $remoteCommand)
+            Invoke-CheckedRetry "ssh" @($server.Host, $remoteCommand)
         }
         finally {
             # Best-effort cleanup also covers an interrupted scp or failed fetch.
-            & "ssh" $server.Host "rm -f $quotedBundle"
-            if ($LASTEXITCODE -ne 0) {
+            $cleanupSucceeded = $false
+            for ($attempt = 1; $attempt -le 3; $attempt += 1) {
+                & "ssh" $server.Host "rm -f $quotedBundle"
+                if ($LASTEXITCODE -eq 0) {
+                    $cleanupSucceeded = $true
+                    break
+                }
+                if ($attempt -lt 3) {
+                    Start-Sleep -Seconds 2
+                }
+            }
+            if (-not $cleanupSucceeded) {
                 Write-Warning "Could not remove temporary bundle on $($server.Name): $remoteBundle"
             }
         }

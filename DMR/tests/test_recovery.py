@@ -7,12 +7,16 @@ import time
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
+from DMR.Highlight import Highlight
 from DMR.Render import Render
+from DMR.Uploader import Uploader
 from DMR import DanmakuRender
+from DMR.Task.highlighttask import HighlightTask
 from DMR.Task.liveevents import LiveEvents
 from DMR.Task.replaytask import ReplayTask
-from DMR.WebService.webapi import WebApi
+from DMR.WebService.webapi import WebApi, highlight_output_options, manual_highlight_output_profiles
 from DMR.utils import (
     DateTimeDecoder,
     PipeMessage,
@@ -44,6 +48,21 @@ class PersistenceTests(WorkingDirectoryTestCase):
             restored = json.load(f, cls=DateTimeDecoder)
 
         self.assertEqual(restored['nested']['ctime'], expected)
+
+    def test_uploader_completion_event_preserves_bilibili_archive_metadata(self):
+        uploader = Uploader.__new__(Uploader)
+        uploader.send_queue = queue.Queue()
+        video = VideoInfo(path='part.mkv', ctime=datetime.now())
+        uploader._send_completed_result({
+            'request_id': 'upload-1', 'source': 'replay/source',
+            'completion_result': 'BV123abc', 'engine': 'biliwebapi',
+            'upload_group': 'group', 'args': {'account': 'archive-account'},
+            'files': [video],
+        })
+        message = uploader.send_queue.get_nowait()
+        self.assertEqual('BV123abc', message.data['result'])
+        self.assertEqual('archive-account', message.data['account'])
+        self.assertEqual(['part.mkv'], message.data['files'])
 
     def test_active_render_becomes_interrupted_after_restart(self):
         source = os.path.abspath('source.mp4')
@@ -280,6 +299,112 @@ class PipelineRecoveryTests(WorkingDirectoryTestCase):
 
         self.assertFalse(idle)
         self.assertEqual(['热点剪辑任务 1 个'], blocking)
+
+    def test_paused_recovered_highlight_does_not_block_idle_restart(self):
+        runtime = DanmakuRender.__new__(DanmakuRender)
+        highlight = SimpleNamespace(
+            jobs={'source:group': {'status': 'analyzing'}},
+            recovered_job_ids={'source:group'},
+        )
+        runtime.engine = SimpleNamespace(
+            plugin_dict={},
+            task_dict={'highlight/Highlight': {'task_type': 'highlight', 'class': highlight}},
+        )
+        idle, blocking = runtime._get_idle_status()
+        self.assertTrue(idle)
+        self.assertEqual([], blocking)
+
+    def test_highlight_worker_does_not_auto_run_persisted_tasks(self):
+        worker = Highlight.__new__(Highlight)
+        worker.stoped = True
+        worker.recv_queue = queue.Queue()
+        worker.tasks = {'worker-task': {'status': 'interrupted'}}
+        worker.executors = Mock()
+        worker.logger = logging.getLogger(__name__)
+        with patch('DMR.Highlight.threading.Thread') as thread:
+            worker.start()
+        thread.assert_called_once()
+        worker.executors.submit.assert_not_called()
+
+    def test_manual_highlight_task_names_include_tasks_without_sessions(self):
+        api = WebApi.__new__(WebApi)
+        api.engine = SimpleNamespace(task_dict={
+            'replay/Empty': {'task_type': 'replay', 'name': 'Empty', 'class': SimpleNamespace()},
+            'highlight/Highlight': {'task_type': 'highlight', 'name': 'Highlight', 'class': SimpleNamespace()},
+        })
+        self.assertEqual(['Empty'], api.get_replay_task_names())
+
+    def test_manual_highlight_output_options_include_names_and_categories(self):
+        options = highlight_output_options({'outputs': [
+            {'id': 'all', 'name': '综合高能', 'categories': ['*']},
+            {'id': 'funny', 'name': '纯搞笑场面', 'categories': ['funny']},
+            {'name': '缺少ID'},
+        ]})
+        self.assertEqual([
+            {'id': 'all', 'name': '综合高能', 'categories': ['*'], 'selected_by_default': True},
+            {'id': 'funny', 'name': '纯搞笑场面', 'categories': ['funny'], 'selected_by_default': True},
+        ], options[:2])
+        self.assertFalse(next(item for item in options if item['id'] == 'skill')['selected_by_default'])
+        self.assertEqual(
+            {'all', 'funny', 'skill', 'absurd', 'fail', 'emotional'},
+            {item['id'] for item in options},
+        )
+
+    def test_manual_profiles_do_not_mutate_automatic_output_config(self):
+        target = {'outputs': [{
+            'id': 'all', 'name': '综合高能', 'categories': ['*'],
+            'max_clips': 12, 'max_total_duration': 300,
+        }]}
+        profiles = manual_highlight_output_profiles(target)
+        self.assertEqual(['all'], [item['id'] for item in target['outputs']])
+        self.assertEqual(
+            {'all', 'funny', 'skill', 'absurd', 'fail', 'emotional'},
+            {item['id'] for item in profiles},
+        )
+        funny = next(item for item in profiles if item['id'] == 'funny')
+        self.assertEqual(8, funny['max_clips'])
+        self.assertEqual(180, funny['max_total_duration'])
+
+    def test_completed_highlight_is_hidden_from_recovery_list_and_can_be_deleted(self):
+        highlight = HighlightTask.__new__(HighlightTask)
+        highlight.jobs = {'source:group': {'group_id': 'group', 'status': 'completed', 'outputs': []}}
+        highlight.recovered_job_ids = {'source:group'}
+        highlight.logger = logging.getLogger(__name__)
+        highlight._save = lambda: None
+        api = WebApi.__new__(WebApi)
+        api.engine = SimpleNamespace(task_dict={
+            'highlight/Highlight': {
+                'task_type': 'highlight', 'name': 'Highlight', 'class': highlight,
+            },
+        })
+        api.logger = logging.getLogger(__name__)
+
+        pipelines = api.get_pipeline_states()
+
+        self.assertEqual([], pipelines)
+        success, reason = highlight.delete_recovered_job('source:group')
+        self.assertTrue(success, reason)
+        self.assertNotIn('source:group', highlight.jobs)
+
+    def test_nonterminal_recovered_highlight_is_paused_and_deletable_in_web(self):
+        highlight = HighlightTask.__new__(HighlightTask)
+        highlight.jobs = {'source:group': {
+            'group_id': 'group', 'status': 'analyzing', 'segments': [{}], 'outputs': [],
+        }}
+        highlight.recovered_job_ids = {'source:group'}
+        api = WebApi.__new__(WebApi)
+        api.engine = SimpleNamespace(task_dict={
+            'highlight/Highlight': {
+                'task_type': 'highlight', 'name': 'Highlight', 'class': highlight,
+            },
+        })
+        api.logger = logging.getLogger(__name__)
+        pipelines = api.get_pipeline_states()
+        self.assertEqual(1, len(pipelines))
+        self.assertTrue(pipelines[0]['can_resume'])
+        self.assertTrue(pipelines[0]['can_delete'])
+        self.assertEqual(0, pipelines[0]['active_count'])
+        self.assertIn('待恢复', pipelines[0]['summary'])
 
     def test_deleting_recovered_pipeline_state_removes_persisted_record(self):
         event = LiveEvents('demo', self._config())

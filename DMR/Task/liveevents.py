@@ -2,6 +2,9 @@ import logging
 import os
 import json
 import hashlib
+import glob
+import time
+import re
 from copy import deepcopy
 from .baseevents import BaseEvents
 from ..utils import *
@@ -17,6 +20,9 @@ class LiveEvents(BaseEvents):
         self.logger = logging.getLogger(__name__)
         state_id = hashlib.sha256(name.encode('utf-8')).hexdigest()
         self.state_file = os.path.join('.temp', 'replay_states', f'{state_id}.json')
+        self.session_file = os.path.join('.temp', 'replay_sessions', f'{state_id}.json')
+        self.completed_sessions = {}
+        self._load_sessions()
         self.recover_pipeline = config.get('common_event_args', {}).get('recover_pipeline', True)
         if self.recover_pipeline:
             self._load_state()
@@ -26,6 +32,162 @@ class LiveEvents(BaseEvents):
                 self.logger.info(f'{self.name}: 已按配置丢弃未完成流水线状态，未删除视频文件.')
             except OSError as e:
                 self.logger.warning(f'{self.name}: 丢弃未完成流水线状态失败: {e}')
+
+    def _load_sessions(self):
+        if not os.path.exists(self.session_file):
+            return
+        try:
+            with open(self.session_file, 'r', encoding='utf-8') as file:
+                self.completed_sessions = json.load(file, cls=DateTimeDecoder)
+            for session in self.completed_sessions.values():
+                for state in session.get('video_states', []):
+                    for info in state.values():
+                        if isinstance(info.get('file'), dict):
+                            info['file'] = video_info_from_dict(info['file'])
+        except Exception as error:
+            self.logger.warning('%s: 读取已完成直播目录失败: %s', self.name, error)
+            self.completed_sessions = {}
+
+    def _save_sessions(self):
+        atomic_json_dump(self.completed_sessions, self.session_file)
+
+    def _archive_session(self, group_id, video_states, inferred=False):
+        if not video_states:
+            return
+        videos = []
+        for state in video_states:
+            video = ((state.get('src_video') or {}).get('file') or
+                     (state.get('src_video_pre') or {}).get('file'))
+            if video:
+                videos.append(video)
+        if not videos:
+            return
+        starts = [getattr(video, 'ctime', None) for video in videos if getattr(video, 'ctime', None)]
+        duration = sum(float(getattr(video, 'duration', 0) or 0) for video in videos)
+        session = {
+            'session_id': group_id, 'group_id': group_id, 'taskname': self.name,
+            'title': getattr(videos[0], 'title', '') or '',
+            'started_at': min(starts).isoformat() if starts else None,
+            'ended_at': time.time(), 'duration': duration, 'inferred': inferred,
+            'video_states': deepcopy(video_states),
+        }
+        self._enrich_session_outputs(session)
+        self.completed_sessions[group_id] = session
+        self._save_sessions()
+
+    def _find_rendered_video(self, original):
+        args = (self.config.get('render_args') or {}).get('dmrender') or {}
+        if not original or not getattr(original, 'path', None):
+            return None
+        if args.get('output_name'):
+            filename = replace_keywords(args['output_name'], original, replace_invalid=True) + \
+                       f".{args.get('format', 'mp4')}"
+        else:
+            filename = os.path.splitext(os.path.basename(original.path))[0] + \
+                       f"（弹幕版）.{args.get('format', 'mp4')}"
+        output_dir = args.get('output_dir') or os.path.dirname(original.path) + '（弹幕版）'
+        path = os.path.abspath(os.path.join(output_dir, filename))
+        if not os.path.isfile(path):
+            return None
+        rendered = deepcopy(original)
+        rendered.path = path
+        rendered.dtype = 'dm_video'
+        rendered.size = os.path.getsize(path)
+        return rendered
+
+    def _enrich_session_outputs(self, session):
+        changed = False
+        for state in session.get('video_states', []):
+            dm_info = state.setdefault('dm_video', {'status': None, 'file': None, 'wait': []})
+            current = dm_info.get('file')
+            if current and os.path.isfile(getattr(current, 'path', '')):
+                continue
+            original = ((state.get('src_video') or {}).get('file') or
+                        (state.get('src_video_pre') or {}).get('file'))
+            rendered = self._find_rendered_video(original)
+            if rendered:
+                dm_info.update({'status': 'ready', 'file': rendered, 'wait': []})
+                changed = True
+        return changed
+
+    def scan_legacy_sessions(self):
+        """Infer sessions from stable video files that predate the session catalog."""
+        args = self.config.get('download_args') or {}
+        output_dir = os.path.abspath(args.get('output_dir') or self.name)
+        if not os.path.isdir(output_dir):
+            return 0
+        enriched = False
+        for session in self.completed_sessions.values():
+            enriched = self._enrich_session_outputs(session) or enriched
+        if enriched:
+            self._save_sessions()
+        active_paths = {
+            os.path.abspath(getattr(info.get('file'), 'path', ''))
+            for group_id, states in self.state_dict.items() if group_id not in self.ended_dict
+            for state in states for info in state.values() if info.get('file')
+        }
+        existing = {
+            os.path.abspath(getattr(((state.get('src_video') or {}).get('file')), 'path', ''))
+            for session in self.completed_sessions.values() for state in session.get('video_states', [])
+        }
+        extensions = {'.flv', '.mp4', '.mkv', '.ts', '.mov', '.webm'}
+        candidates = []
+        for path in glob.glob(os.path.join(output_dir, '*')):
+            if (not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in extensions or
+                    os.path.basename(path).startswith('[正在录制]') or os.path.abspath(path) in active_paths):
+                continue
+            if os.path.abspath(path) in existing:
+                continue
+            stat = os.stat(path)
+            if time.time() - stat.st_mtime < 120:
+                continue
+            duration = float(FFprobe.get_duration(path) or 0)
+            if duration <= 0:
+                continue
+            candidates.append((stat.st_mtime - duration, stat.st_mtime, path, duration))
+        candidates.sort()
+        gap = max(60, float(args.get('stop_wait_time', 0) or 0) * 60)
+        groups = []
+        for item in candidates:
+            if not groups or item[0] - groups[-1][-1][1] > gap:
+                groups.append([item])
+            else:
+                groups[-1].append(item)
+        added = 0
+        for group in groups:
+            fingerprint = hashlib.sha256('\0'.join(item[2] for item in group).encode('utf-8')).hexdigest()[:16]
+            session_id = f'legacy-{fingerprint}'
+            states = []
+            for index, (started, _, path, duration) in enumerate(group, 1):
+                stem = os.path.splitext(path)[0]
+                video = VideoInfo(path=path, dtype='src_video', group_id=session_id, segment_id=index,
+                                  size=os.path.getsize(path), ctime=datetime.fromtimestamp(started),
+                                  duration=duration, title='', taskname=self.name,
+                                  streamer=StreamerInfo(name=self.name),
+                                  dm_file_id=stem + '.ass' if os.path.exists(stem + '.ass') else None,
+                                  raw_dm_file_id=stem + '.danmaku.jsonl' if os.path.exists(stem + '.danmaku.jsonl') else None)
+                states.append({'src_video': {'status': 'ready', 'file': video, 'wait': []},
+                               'src_video_pre': {'status': None, 'file': None, 'wait': []},
+                               'dm_video': {'status': None, 'file': None, 'wait': []},
+                               'subtitle': {'status': None, 'file': None, 'wait': []}})
+            self._archive_session(session_id, states, inferred=True)
+            added += 1
+        return added
+
+    def get_completed_session(self, session_id, selected_paths=None):
+        stored = self.completed_sessions.get(session_id)
+        if stored and self._enrich_session_outputs(stored):
+            self._save_sessions()
+        session = deepcopy(stored)
+        if not session:
+            return None
+        if selected_paths is not None:
+            selected = {os.path.abspath(path) for path in selected_paths}
+            session['video_states'] = [
+                state for state in session['video_states']
+                if os.path.abspath(getattr((state.get('src_video') or {}).get('file'), 'path', '')) in selected
+            ]
+        return session
 
     def _load_state(self):
         if not os.path.exists(self.state_file):
@@ -369,6 +531,7 @@ class LiveEvents(BaseEvents):
         
         if group_id in self.state_dict:
             self.ended_dict[group_id] = time.time()
+            self._archive_session(group_id, self.state_dict[group_id])
         else:
             self.logger.debug(f'No such group:{group_id}.')
         
@@ -645,14 +808,38 @@ class LiveEvents(BaseEvents):
     def onUploadEnd(self, message:PipeMessage):
         self.logger.info(f'{self.name}: {message.msg}.')
         request_id = message.request_id
+        upload_result = (message.data or {}).get('result')
+        bvid = upload_result if isinstance(upload_result, str) and re.fullmatch(r'BV[0-9A-Za-z]+', upload_result) else None
+        upload_account = (message.data or {}).get('account')
+        upload_engine = (message.data or {}).get('engine')
+        changed_groups = set()
         # 将状态信息中request_id对应的等待移除
         for group_id, video_states in self.state_dict.items():
             for idx, video_state in enumerate(video_states):
                 for vtype, info in video_state.items():
                     if request_id in info['wait']:
+                        changed_groups.add(group_id)
                         self.state_dict[group_id][idx][vtype]['wait'].remove(request_id)
                         if len(self.state_dict[group_id][idx][vtype]['wait']) == 0:
                             self.state_dict[group_id][idx][vtype]['status'] = 'uploaded'
+                        video = info.get('file')
+                        if bvid and video:
+                            upload_info = {
+                                'bvid': bvid, 'engine': upload_engine, 'account': upload_account,
+                                'part_title': os.path.splitext(os.path.basename(video.path))[0],
+                            }
+                            if vtype == 'dm_video':
+                                video.dm_video_id = bvid
+                                video.dm_video_upload = upload_info
+                            elif vtype in ('src_video', 'src_video_pre'):
+                                video.src_video_id = bvid
+                                video.src_video_upload = upload_info
+        for group_id in changed_groups:
+            session = self.completed_sessions.get(group_id)
+            if session:
+                session['video_states'] = deepcopy(self.state_dict[group_id])
+        if changed_groups:
+            self._save_sessions()
         
         ret_msgs = []
         if self.config['common_event_args'].get('auto_clean'):

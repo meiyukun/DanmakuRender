@@ -67,6 +67,12 @@ class HighlightTask:
             return False, '热点任务记录不存在。'
         if job.get('status') in ('completed', 'failed'):
             return False, '热点任务已经结束。'
+        previous_request_id = job.get('request_id')
+        if previous_request_id:
+            self._worker_recv.put(PipeMessage(
+                source=f'highlight/{self.taskname}', target='highlight', event='discard',
+                request_id=previous_request_id,
+            ))
         for dependency in job.get('dependencies', {}).values():
             if dependency.get('status') == 'waiting':
                 dependency['status'] = 'interrupted'
@@ -85,6 +91,38 @@ class HighlightTask:
             self._dispatch_if_ready(job_id, job)
         self._save()
         self.logger.info('已恢复热点任务 %s。', job_id)
+        return True, ''
+
+    def delete_recovered_job(self, job_id):
+        if job_id not in self.recovered_job_ids:
+            return False, '只能删除本次启动恢复的热点任务记录。'
+        job = self.jobs.get(job_id)
+        if not job:
+            return False, '热点任务记录不存在。'
+        request_id = job.get('request_id')
+        if request_id:
+            self._worker_recv.put(PipeMessage(
+                source=f'highlight/{self.taskname}', target='highlight', event='discard',
+                request_id=request_id,
+            ))
+        self.jobs.pop(job_id, None)
+        self.recovered_job_ids.discard(job_id)
+        self._save()
+        self.logger.info('已取消并删除恢复热点任务记录 %s，未删除视频文件。', job_id)
+        return True, ''
+
+    def delete_completed_job_by_manifest(self, manifest_path):
+        """Remove one terminal highlight result from persistent task history."""
+        target = os.path.realpath(manifest_path or '')
+        job_id, job = next(((key, value) for key, value in self.jobs.items()
+                            if os.path.realpath(value.get('manifest') or '') == target), (None, None))
+        if not job:
+            return False, '热点场次记录不存在。'
+        if job.get('status') not in ('completed', 'failed'):
+            return False, f'热点场次仍处于 {job.get("status")} 状态，不能删除。'
+        self.jobs.pop(job_id, None)
+        self.recovered_job_ids.discard(job_id)
+        self._save()
         return True, ''
 
     @staticmethod
@@ -115,12 +153,21 @@ class HighlightTask:
     def _accept_source(self, message):
         data = message.data or {}
         source_task = data.get('source_task')
-        target = self.config.get('targets', {}).get(source_task)
-        if not target or not target.get('enabled', True):
+        manual = bool(data.get('manual'))
+        target = deepcopy(data.get('target_config')) if manual else self.config.get('targets', {}).get(source_task)
+        if not target or (not manual and not target.get('enabled', True)):
             return
         group_id = data.get('group_id')
-        job_id = f'{source_task}:{group_id}'
+        run_id = data.get('run_id')
+        job_id = f'{source_task}:{group_id}:manual:{run_id}' if manual else f'{source_task}:{group_id}'
         if job_id in self.jobs:
+            return
+        if manual and any(
+            job.get('source_task') == source_task and job.get('group_id') == group_id and
+            job.get('status') not in ('completed', 'failed')
+            for job in self.jobs.values()
+        ):
+            self.logger.warning('%s: %s 已有正在运行的热点任务。', self.taskname, group_id)
             return
         if data.get('session_ended') is not True:
             self.logger.warning('%s: 忽略尚未确认整场结束的热点通知 %s。', self.taskname, job_id)
@@ -178,6 +225,19 @@ class HighlightTask:
                 'subtitle': subtitle if subtitle_mode != 'disabled' else None,
                 'source_video': original,
             }
+            upload_candidates = [selected, original, (state.get('dm_video') or {}).get('file')]
+            for uploaded in upload_candidates:
+                if not uploaded:
+                    continue
+                upload_info = (getattr(uploaded, 'dm_video_upload', None) or
+                               getattr(uploaded, 'src_video_upload', None))
+                bvid = (getattr(uploaded, 'dm_video_id', None) or
+                        getattr(uploaded, 'src_video_id', None))
+                if bvid:
+                    segment['bilibili_upload'] = deepcopy(upload_info) if upload_info else {
+                        'bvid': bvid, 'part_title': os.path.splitext(os.path.basename(uploaded.path))[0],
+                    }
+                    break
             segments.append(segment)
         accounted_segments = len(segments) + len(ignored_segments)
         if accounted_segments != expected_segments:
@@ -193,6 +253,7 @@ class HighlightTask:
             )
         job = {
             'source_task': source_task, 'group_id': group_id, 'status': 'preparing',
+            'manual': manual, 'run_id': run_id,
             'received_at': time.time(), 'source_segment_count': expected_segments,
             'segment_count': len(segments), 'ignored_segments': ignored_segments, 'segments': segments,
             'config': deepcopy(target), 'uploads': {}, 'dependencies': dependencies,
@@ -218,14 +279,23 @@ class HighlightTask:
                 ))
             if subtitle_mode in ('prefer', 'required') and not segment.get('subtitle'):
                 transcribe = deepcopy(preprocess.get('transcribe') or {})
+                existing_upload = segment.get('bilibili_upload')
+                if existing_upload:
+                    bili_args = deepcopy(transcribe.get('bilibili') or {})
+                    if existing_upload.get('account') and not bili_args.get('cookies'):
+                        bili_args['account'] = existing_upload['account']
+                    transcribe = {'engine': 'bilibili', 'bilibili': bili_args}
                 if transcribe:
                     request_id = uuid()
                     engine = transcribe.get('engine', 'xm')
+                    transcribe_args = deepcopy(transcribe.get(engine, transcribe.get('args', {})))
+                    if engine == 'bilibili' and segment.get('bilibili_upload'):
+                        transcribe_args['existing_upload'] = deepcopy(segment['bilibili_upload'])
                     dependencies[request_id] = {'kind': 'subtitle', 'segment_id': segment['segment_id'], 'status': 'waiting'}
                     self.send_queue.put(PipeMessage(
                         source=f'highlight/{self.taskname}', target='transcriber', event='newtask', request_id=request_id,
                         data={'taskname': self.taskname, 'video': segment['source_video'], 'engine': engine,
-                              'args': transcribe.get(engine, transcribe.get('args', {}))},
+                              'args': transcribe_args},
                     ))
         request_id = uuid()
         job['request_id'] = request_id
@@ -251,9 +321,14 @@ class HighlightTask:
             processor_config['output_dir'] = os.path.join(
                 os.path.dirname(job['segments'][0]['video'].path), f'高能混剪-{self.taskname}'
             )
+        if job.get('manual'):
+            processor_config['output_dir'] = os.path.join(
+                processor_config['output_dir'], f'{job["group_id"]}-manual-{job["run_id"]}'
+            )
         self._worker_recv.put(PipeMessage(
             source=f'highlight/{self.taskname}', target='highlight', event='newtask', request_id=job['request_id'],
-            data={'taskname': self.taskname, 'group_id': job['group_id'], 'segments': job['segments'],
+            data={'taskname': self.taskname, 'source_task': job['source_task'],
+                  'group_id': job['group_id'], 'segments': job['segments'],
                   'source_segment_count': job.get('source_segment_count'),
                   'ignored_segments': job.get('ignored_segments', []),
                   'subtitle_status': {'mode': source.get('subtitle', 'prefer')},
@@ -265,6 +340,10 @@ class HighlightTask:
             dependency = job.get('dependencies', {}).get(message.request_id)
             if not dependency:
                 continue
+            if dependency.get('status') != 'waiting':
+                self.logger.info('忽略已结束依赖的迟到消息: %s (%s)', message.request_id,
+                                 dependency.get('status'))
+                return
             segment = next((item for item in job['segments'] if item['segment_id'] == dependency['segment_id']), None)
             if message.event == 'end' and dependency['kind'] == 'render':
                 segment['video'] = (message.data or {}).get('output')
@@ -272,7 +351,8 @@ class HighlightTask:
                 self.send_queue.put(PipeMessage(source=f'highlight/{self.taskname}', target='render',
                                                 event='ack', request_id=message.request_id))
             elif message.event == 'end' and dependency['kind'] == 'subtitle':
-                segment['subtitle'] = message.data
+                result = message.data if isinstance(message.data, dict) else {}
+                segment['subtitle'] = result.get('subtitle') if result else message.data
                 dependency['status'] = 'ready'
             else:
                 dependency['status'] = 'failed'

@@ -87,6 +87,17 @@ class RawDanmakuTests(unittest.TestCase):
             self.assertEqual(["帅"], [item["text"] for item in default_items])
             self.assertEqual(2, len(all_items))
 
+    def test_parser_preserves_named_emotes_from_overlong_danmaku(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "segment.danmaku.jsonl")
+            with open(path, "w", encoding="utf-8") as file:
+                file.write(json.dumps({
+                    "video_time": 3, "type": "danmaku", "sender": {"name": "用户"},
+                    "text": "普通长文本" * 40 + "[捂脸][笑哭]",
+                }, ensure_ascii=False) + "\n")
+            items = parse_danmaku(path)
+            self.assertEqual(["[捂脸][笑哭]"], [item["text"] for item in items])
+
     def test_ai_representatives_only_contain_time_and_text(self):
         items = [
             {"time": 1.5, "text": "哈哈", "dtype": "danmaku", "uname": "用户", "uid": 123},

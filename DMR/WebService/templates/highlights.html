@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='highlights.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='highlight-results.css') }}">
+{% endblock %}
+{% block content %}
+<section class="card highlight-hero">
+  <div>
+    <span class="eyebrow">HIGHLIGHT STUDIO</span>
+    <h1>热点剪辑工作台</h1>
+    <p>从整场直播中生成独立热点素材，自由选择、排序并拼成你想要的版本。</p>
+  </div>
+  <div class="hero-stat"><strong id="hero-result-count">0</strong><span>已分析场次</span></div>
+</section>
+
+<section class="card setup-card">
+  <div class="section-heading">
+    <div><span class="step-index">01</span><h2>创建热点任务</h2></div>
+    <p>选择已结束的直播场次。手动任务默认不上传。</p>
+  </div>
+  <div class="setup-toolbar">
+    <label class="field"><span>录制任务</span><select id="task-filter"></select></label>
+    <button type="button" class="btn-secondary" id="scan-button">扫描旧录像</button>
+    <span id="scan-status" class="inline-status" aria-live="polite"></span>
+  </div>
+  <div id="session-list" class="session-list"></div>
+</section>
+
+<section class="card setup-card" id="manual-panel" hidden>
+  <div class="section-heading">
+    <div><span class="step-index">02</span><h2 id="selected-title">剪辑设置</h2></div>
+  </div>
+  <div id="segment-list" class="option-grid"></div>
+  <div class="form-grid">
+    <label class="field"><span>视频源</span><select id="source-video"><option value="src_video">无弹幕原版</option><option value="dm_video">弹幕版</option></select></label>
+    <label class="field"><span>字幕</span><select id="subtitle-mode"><option value="disabled">不使用</option><option value="available" selected>仅使用已有字幕</option><option value="prefer">优先等待，超时降级</option><option value="required">必须等待</option></select></label>
+    <label class="field"><span>字幕超时（秒）</span><input id="subtitle-timeout" type="number" min="0" value="10800"></label>
+  </div>
+  <fieldset class="output-fieldset"><legend>输出类别（至少选择一个）</legend><div id="output-options" class="option-grid"><span>请先选择录制任务。</span></div></fieldset>
+  <details class="advanced-settings"><summary>高级临时覆盖 YAML</summary><textarea id="override-yaml" rows="14">{}</textarea></details>
+  <label class="switch-row"><input type="checkbox" id="upload-confirmed"><span>本次剪辑完成后按 DMH 配置上传</span></label>
+  <div class="submit-row"><button type="button" id="submit-manual">开始热点剪辑</button><span id="submit-status" class="inline-status" aria-live="polite"></span></div>
+</section>
+
+<section class="card library-shell">
+  <div class="section-heading library-heading">
+    <div><span class="step-index">03</span><h2>热点素材库</h2></div>
+    <p>每张卡片都是一个独立热点事件。点击卡片空白处选择，点击视频正常播放。</p>
+  </div>
+  <div class="result-filters">
+    <label class="field"><span>场次</span><select id="result-session-filter"></select></label>
+    <label class="field"><span>类别</span><select id="result-category-filter"><option value="*">全部类别</option></select></label>
+    <div class="filter-actions">
+      <button type="button" class="btn-ghost" data-bulk="all">全选当前</button>
+      <button type="button" class="btn-ghost" data-bulk="invert">反选当前</button>
+      <button type="button" class="btn-ghost" data-bulk="clear">清空</button>
+    </div>
+  </div>
+  <div id="highlight-results" class="highlight-results"><div class="loading-state"><span class="spinner"></span>正在加载热点素材…</div></div>
+</section>
+
+<aside id="remix-workbench" class="remix-workbench" aria-label="混剪工作台">
+  <div class="workbench-summary">
+    <div><strong id="selected-count">0</strong><span> 个片段</span></div>
+    <div><strong id="selected-duration">0:00</strong><span> 总时长</span></div>
+  </div>
+  <div id="workbench-items" class="workbench-items"></div>
+  <div class="workbench-actions"><button type="button" class="btn-ghost" id="clear-selection">清空</button><button type="button" id="recompose-button" disabled>另存为新混剪</button></div>
+  <span id="remix-status" class="inline-status" aria-live="polite"></span>
+</aside>
+
+<div id="confirm-modal" class="modal-backdrop" hidden>
+  <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="danger-icon">!</div><h3 id="confirm-title">永久删除片段？</h3><p id="confirm-message"></p>
+    <div class="modal-actions"><button type="button" class="btn-ghost" id="confirm-cancel">取消</button><button type="button" class="btn-danger" id="confirm-delete">永久删除</button></div>
+  </div>
+</div>
+<div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+<script id="initial-sessions" type="application/json">{{ sessions|tojson }}</script>
+<script id="initial-tasknames" type="application/json">{{ tasknames|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='highlights.js') }}"></script>{% endblock %}

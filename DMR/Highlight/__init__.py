@@ -13,7 +13,7 @@ from DMR.utils import (
     video_info_from_dict, uuid,
 )
 from .analyzer import find_hotspots, parse_danmaku, parse_srt, select_profile
-from .cutter import render_outputs, write_manifest
+from .cutter import render_highlight, write_manifest
 
 
 DEFAULT_PROFILES = [{
@@ -23,6 +23,13 @@ DEFAULT_PROFILES = [{
     "max_clips": 12,
     "max_total_duration": 300,
 }]
+
+
+def filter_clip_candidates(candidates, categories):
+    """Keep individual hotspot events; categories are filters, never aggregation keys."""
+    allowed = set(categories or ["*"])
+    return [candidate for candidate in candidates
+            if "*" in allowed or candidate.get("category") in allowed]
 
 DEFAULT_AI_SYSTEM = (
     "你是直播内容剪辑审核员。只能依据候选区间内带时间戳的弹幕、字幕和统计特征，"
@@ -98,6 +105,8 @@ class Highlight:
                     self.add_task(message)
                 elif message.event == "ack":
                     self.ack(message.request_id)
+                elif message.event == "discard":
+                    self.discard(message.request_id)
                 elif message.event == "exit":
                     break
             except Exception as error:
@@ -106,12 +115,8 @@ class Highlight:
     def start(self):
         self.stoped = False
         threading.Thread(target=self._monitor, daemon=True).start()
-        with self._lock:
-            for task in list(self.tasks.values()):
-                if task.get("status") == "completion_pending":
-                    self._send("end", "热点混剪已完成", task, task.get("result"))
-                else:
-                    self.executors.submit(self._run_task, task)
+        if self.tasks:
+            self.logger.info("Loaded %s paused highlight worker tasks; waiting for explicit recovery.", len(self.tasks))
 
     def add_task(self, message):
         with self._lock:
@@ -122,7 +127,8 @@ class Highlight:
             data = message.data or {}
             task = {
                 "uuid": uuid(), "source": message.source, "request_id": message.request_id,
-                "taskname": data.get("taskname"), "group_id": data.get("group_id"),
+                "taskname": data.get("taskname"), "source_task": data.get("source_task"),
+                "group_id": data.get("group_id"),
                 "segments": data.get("segments") or [], "config": data.get("args") or {},
                 "source_segment_count": data.get("source_segment_count"),
                 "ignored_segments": data.get("ignored_segments") or [],
@@ -140,6 +146,18 @@ class Highlight:
                     self.tasks.pop(task_id, None)
                     self._save()
                     return
+
+    def discard(self, request_id):
+        """Remove a paused/replaced worker task without deleting generated videos."""
+        with self._lock:
+            removed = False
+            for collection in (self.tasks, self.failed_tasks):
+                for task_id, task in list(collection.items()):
+                    if task.get("request_id") == request_id:
+                        collection.pop(task_id, None)
+                        removed = True
+            if removed:
+                self._save()
 
     @staticmethod
     def _extract_json(text):
@@ -300,17 +318,29 @@ class Highlight:
                     "peak": 0.0, "peak_height": 0, "prominence": 0, "score": 0,
                     "category": "other_content", "test_fallback": True,
                 }]
-            profiles = []
+            requested_profiles = []
             for profile in config.get("outputs") or DEFAULT_PROFILES:
                 profile = dict(profile)
                 profile_id = str(profile.get("id", ""))
                 if not re.fullmatch(r"[a-z0-9_-]+", profile_id):
                     raise ValueError(f"热点输出方案ID不合法: {profile_id}")
                 profile.setdefault("name", profile_id)
-                clips = select_profile(candidates, profile)
-                if clips:
-                    profile["clips"] = clips
-                    profiles.append(profile)
+                requested_profiles.append(profile)
+
+            all_profile = next((item for item in requested_profiles if item["id"] == "all"), None)
+            categories = {category for item in requested_profiles for category in item.get("categories", [])}
+            wildcard = "*" in categories or bool(all_profile)
+            limit_profile = all_profile or (config.get("all_output") or {})
+            combined_profile = {
+                "id": "all" if wildcard else (requested_profiles[0]["id"] if len(requested_profiles) == 1 else "mix"),
+                "name": ("综合高能" if wildcard else requested_profiles[0]["name"] if len(requested_profiles) == 1 else "自选类别混剪"),
+                "categories": ["*"] if wildcard else sorted(categories),
+                "max_clips": int(limit_profile.get("max_clips", 12)),
+                "max_total_duration": float(limit_profile.get("max_total_duration", 300)),
+                "output_name": limit_profile.get("output_name"),
+            }
+            clip_candidates = filter_clip_candidates(candidates, combined_profile["categories"])
+            selected = select_profile(clip_candidates, combined_profile) if requested_profiles else []
 
             output_dir = config.get("output_dir") or os.path.dirname(base_info.path) + "（高能混剪）"
             manifest_path = os.path.join(
@@ -320,16 +350,41 @@ class Highlight:
             task["status"] = "rendering"
             with self._lock:
                 self._save()
-            outputs = render_outputs(segments, profiles, output_dir, base_info, config, self.logger) if profiles else []
+            if candidates and requested_profiles:
+                try:
+                    outputs, clip_records, encoding_mode = render_highlight(
+                        segments, clip_candidates, selected, output_dir, base_info, config, combined_profile, self.logger
+                    )
+                except Exception:
+                    if (str(config.get("mode", "copy")).lower() != "copy" or
+                            config.get("copy_fallback", "reencode") != "reencode"):
+                        raise
+                    self.logger.warning("无重编码裁切或拼接失败，整场回退重新编码", exc_info=True)
+                    fallback_config = dict(config)
+                    fallback_config["mode"] = "reencode"
+                    outputs, clip_records, encoding_mode = render_highlight(
+                        segments, clip_candidates, selected, output_dir, base_info,
+                        fallback_config, combined_profile, self.logger,
+                    )
+            else:
+                outputs, clip_records, encoding_mode = [], [], config.get("mode", "copy")
             for output in outputs:
                 output.highlight_manifest = manifest_path
             manifest = {
-                "version": 1, "taskname": task.get("taskname"), "group_id": task.get("group_id"),
+                "version": 2, "taskname": task.get("taskname"), "source_task": task.get("source_task"),
+                "group_id": task.get("group_id"),
                 "subtitle_status": task.get("subtitle_status"), "analysis": analysis,
                 "source_segment_count": task.get("source_segment_count", len(task.get("segments", []))),
                 "analyzed_segment_count": len(task.get("segments", [])),
                 "ignored_segments": task.get("ignored_segments", []),
                 "selected_candidates": candidates,
+                "clip_candidates": [str(item.get("id")) for item in clip_candidates],
+                "requested_outputs": [item["id"] for item in requested_profiles],
+                "initial_mix": {"id": combined_profile["id"],
+                                "clip_ids": [str(item.get("id")) for item in selected]},
+                "encoding_mode": encoding_mode,
+                "clips": clip_records,
+                "versions": [],
                 "outputs": [{
                     "path": output.path, "dtype": output.dtype, "duration": output.duration,
                 } for output in outputs],

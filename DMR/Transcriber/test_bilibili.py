@@ -118,6 +118,33 @@ class BilibiliTranscriberTest(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.splitext(source)[0] + '.srt'))
             self.assertFalse(any(os.path.exists(path) for path in proxies))
 
+    def test_transcribe_reuses_subtitle_from_existing_upload_without_proxy(self):
+        fake_uploader = SimpleNamespace(
+            _session=SimpleNamespace(cookies={'SESSDATA': 'ready'}),
+            stop=lambda: None,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, 'video.flv')
+            open(source, 'wb').close()
+            engine = BilibiliTranscriber(
+                account='bilibili', keep_raw_json=False,
+                existing_upload={'bvid': 'BV-existing', 'part_title': 'video'},
+            )
+            with patch.object(engine, '_validate_cookie_file'), \
+                    patch.object(engine, '_wait_for_subtitle', return_value=(
+                        {'body': [{'from': 0, 'to': 1, 'content': '已有字幕'}]}, 11, 22,
+                    )) as wait, \
+                    patch.object(engine, '_get_uploader') as upload_proxy, \
+                    patch('DMR.Transcriber.bilibili.BiliWebApi', return_value=fake_uploader):
+                status, result = engine.transcribe(SimpleNamespace(path=source, duration=60))
+            self.assertTrue(status)
+            self.assertTrue(result['reused_existing_upload'])
+            self.assertEqual(0, result['upload_attempts'])
+            wait.assert_called_once()
+            upload_proxy.assert_not_called()
+            with open(os.path.splitext(source)[0] + '.srt', encoding='utf-8') as file:
+                self.assertIn('已有字幕', file.read())
+
 
 if __name__ == '__main__':
     unittest.main()

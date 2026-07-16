@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 
 _ASS_TAG_RE = re.compile(r"\{.*?\}")
 _VISIBLE_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]")
+_BRACKET_EMOTE_RE = re.compile(r"\[([^\[\]\r\n]{1,24})\]")
 _SRT_TIME_RE = re.compile(
     r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*"
     r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})"
@@ -34,6 +35,32 @@ REACTION_FAMILIES = {
     "fail": ("寄", "完了", "白给", "下饭", "没了", "死了", "翻车", "可惜", "炸了"),
     "emotional": ("泪目", "哭了", "感动", "破防", "温柔", "好听"),
 }
+# Named platform emotes are stored as text such as ``[捂脸]`` in raw danmaku.
+# Keep social/gift emotes (比心、爱心、红包、互粉...) out of this map so routine
+# interaction cannot satisfy the hotspot reaction threshold by itself.
+BRACKET_EMOTE_FAMILIES = {
+    "funny": (
+        "笑哭", "大笑", "偷笑", "憨笑", "坏笑", "奸笑",
+        "做鬼脸", "鬼脸", "如花", "调皮", "吐舌", "滑稽", "柴犬",
+    ),
+    "skill": ("打call", "胜利", "给力"),
+    "absurd": (
+        "疑问", "发呆", "宕机", "黑脸", "白眼", "斜眼", "皱眉", "擦汗",
+        "无语", "尴尬", "裂开", "惊恐", "恐惧", "绝望", "苦涩", "不是吧",
+    ),
+    "fail": ("打脸", "躺平", "吐血", "晕", "晕倒"),
+    "emotional": ("流泪", "泣不成声", "大哭", "委屈", "难过", "哭泣", "破防"),
+}
+AMBIGUOUS_BRACKET_EMOTES = {
+    "666", "捂脸", "呲牙", "鼓掌", "小鼓掌", "酷拽", "点赞", "赞", "微笑",
+}
+CONTEXT_FAMILY_WORDS = {
+    "funny": REACTION_FAMILIES["funny"] + ("好笑", "笑死我了"),
+    "skill": REACTION_FAMILIES["skill"] + ("漂亮", "秀到了"),
+    "absurd": REACTION_FAMILIES["absurd"] + ("逆天", "离谱", "这也行"),
+    "fail": REACTION_FAMILIES["fail"] + ("失误", "空大", "空枪", "空了", "送了"),
+    "emotional": REACTION_FAMILIES["emotional"],
+}
 BENEFIT_WORDS = {
     "福袋", "口令", "抽奖", "红包", "福利", "参与抽奖", "发送口令", "上舰抽",
     "舰长抽", "中奖", "开奖", "礼物抽", "关注抽", "粉丝团",
@@ -43,11 +70,14 @@ LOW_VALUE_WORDS = {
     "下播", "再见", "感谢老板", "谢谢老板", "老板大气", "点点关注", "关注主播",
 }
 CATEGORY_WORDS = {
-    "funny": ("哈哈", "笑死", "绷不住", "乐", "小丑", "节目效果", "hhh", "www"),
-    "skill": ("帅", "牛逼", "太强", "神", "操作", "天秀", "极限", "无敌", "起飞"),
-    "absurd": ("逆天", "离谱", "什么情况", "看不懂", "???", "人机", "抽象"),
-    "fail": ("完了", "寄", "翻车", "炸了", "没了", "死了", "可惜", "事故"),
-    "emotional": ("泪目", "哭了", "感动", "破防", "温柔", "好听"),
+    "funny": ("哈哈", "笑死", "绷不住", "乐", "小丑", "节目效果", "hhh", "www",
+              "笑哭", "大笑", "偷笑", "憨笑", "坏笑", "做鬼脸"),
+    "skill": ("帅", "牛逼", "太强", "神", "操作", "天秀", "极限", "无敌", "起飞",
+              "鼓掌", "打call", "胜利", "给力", "酷拽"),
+    "absurd": ("逆天", "离谱", "什么情况", "看不懂", "???", "人机", "抽象",
+               "疑问", "发呆", "宕机", "黑脸", "白眼", "无语", "尴尬", "裂开"),
+    "fail": ("完了", "寄", "翻车", "炸了", "没了", "死了", "可惜", "事故", "打脸", "躺平"),
+    "emotional": ("泪目", "哭了", "感动", "破防", "温柔", "好听", "流泪", "泣不成声", "大哭", "委屈"),
 }
 
 
@@ -75,6 +105,31 @@ def _clean_text(value):
     return text
 
 
+def _reaction_emote_tokens(value):
+    raw_text = html.unescape(str(value or ""))
+    raw_text = _ASS_TAG_RE.sub("", raw_text).replace("\\N", " ").replace("\\n", " ").lower()
+    matched = []
+    for emote in _BRACKET_EMOTE_RE.findall(raw_text):
+        compact_emote = re.sub(r"\s+", "", emote)
+        if compact_emote in AMBIGUOUS_BRACKET_EMOTES:
+            matched.append((emote.strip(), "ambiguous"))
+            continue
+        for family, names in BRACKET_EMOTE_FAMILIES.items():
+            if any(name in compact_emote for name in names):
+                matched.append((emote.strip(), family))
+                break
+    return matched
+
+
+def _clean_danmaku_text(value):
+    cleaned = _clean_text(value)
+    if cleaned:
+        return cleaned
+    # Preserve named reactions from otherwise discarded overlong messages.
+    tokens = [f"[{emote}]" for emote, _ in _reaction_emote_tokens(value)]
+    return "".join(tokens)[:120]
+
+
 def normalize_campaign_text(value):
     text = _clean_text(value).lower()
     text = re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE)
@@ -83,6 +138,20 @@ def normalize_campaign_text(value):
 
 
 def reaction_family(value, max_chars=16):
+    emote_tokens = _reaction_emote_tokens(value)
+    bracket_families = [family for _, family in emote_tokens]
+    if bracket_families:
+        raw_text = html.unescape(str(value or "")).lower()
+        context = _BRACKET_EMOTE_RE.sub(" ", raw_text)
+        context_scores = {
+            family: sum(context.count(word) for word in words)
+            for family, words in CONTEXT_FAMILY_WORDS.items()
+        }
+        context_family, context_score = max(context_scores.items(), key=lambda item: item[1])
+        if context_score:
+            return context_family
+        explicit = [family for family in bracket_families if family != "ambiguous"]
+        return Counter(explicit).most_common(1)[0][0] if explicit else "ambiguous"
     cleaned = _clean_text(value).lower()
     compact = re.sub(r"\s+", "", cleaned)
     if not compact or len(compact) > max_chars:
@@ -111,13 +180,13 @@ def parse_danmaku(path, offset=0.0, allowed_types=None):
                 parts = line.rstrip("\n").split(",", 9)
                 if len(parts) < 10:
                     continue
-                text = _clean_text(parts[9])
+                text = _clean_danmaku_text(parts[9])
                 if text:
                     items.append({"time": offset + _ass_time(parts[1]), "text": text, "dtype": "danmaku"})
     elif ext == ".xml":
         root = ET.parse(path).getroot()
         for node in root.iter("d"):
-            text = _clean_text(node.text)
+            text = _clean_danmaku_text(node.text)
             if not text:
                 continue
             try:
@@ -133,7 +202,7 @@ def parse_danmaku(path, offset=0.0, allowed_types=None):
                     dtype = str(record.get("type") or "other")
                     if allowed_types and dtype not in allowed_types:
                         continue
-                    text = _clean_text(record.get("text"))
+                    text = _clean_danmaku_text(record.get("text"))
                     timestamp = float(record.get("video_time"))
                     if not text:
                         continue
@@ -314,15 +383,47 @@ def _find_quiet_boundary(curve, origin, direction, threshold, quiet_seconds, max
 
 def _same_peak_event(previous, current, curve, config):
     gap = current["peak"] - previous["peak"]
-    if gap <= 0 or gap > int(config.get("peak_merge_max_gap_seconds", 30)):
+    if gap <= 0 or gap > int(config.get("peak_merge_max_gap_seconds", 45)):
         return False
-    valley = min(curve[previous["peak"]:current["peak"] + 1])
     baseline = min(previous["baseline"], current["baseline"])
     smaller_peak = min(previous["peak_height"], current["peak_height"])
     if smaller_peak <= baseline:
         return True
-    valley_ratio = (valley - baseline) / (smaller_peak - baseline)
-    return valley_ratio >= float(config.get("peak_merge_valley_ratio", 0.35))
+    # A momentary dip should not split a broad reaction episode. Only treat the
+    # peaks as separate events after the curve has stayed near baseline for a
+    # configurable period.
+    release = baseline + float(config.get("peak_merge_valley_ratio", 0.25)) * (
+        smaller_peak - baseline
+    )
+    required_quiet = max(1, int(config.get("peak_merge_quiet_seconds", 6)))
+    quiet = 0
+    for value in curve[previous["peak"]:current["peak"] + 1]:
+        if value <= release:
+            quiet += 1
+            if quiet >= required_quiet:
+                return False
+        else:
+            quiet = 0
+    return True
+
+
+def _excess_quantile_boundary(curve, start, end, baseline, quantile):
+    """Return the position containing a quantile of density above baseline."""
+    start = max(0, int(start))
+    end = min(len(curve) - 1, int(end))
+    if end <= start:
+        return start
+    excess = [max(0.0, curve[position] - baseline) for position in range(start, end + 1)]
+    total = sum(excess)
+    if total <= 0:
+        return start if quantile <= 0.5 else end
+    target = total * min(max(float(quantile), 0.0), 1.0)
+    accumulated = 0.0
+    for position, value in zip(range(start, end + 1), excess):
+        accumulated += value
+        if accumulated >= target:
+            return position
+    return end
 
 
 def _segment_items(items, start, end):
@@ -335,7 +436,13 @@ def _is_low_value(text):
 
 
 def _classify(items):
-    blob = " ".join(item["text"] for item in items).lower()
+    def semantic_text(value):
+        return _BRACKET_EMOTE_RE.sub(
+            lambda match: "" if re.sub(r"\s+", "", match.group(1)).lower()
+            in AMBIGUOUS_BRACKET_EMOTES else match.group(0),
+            value,
+        )
+    blob = " ".join(semantic_text(item["text"]) for item in items).lower()
     scores = {
         category: sum(blob.count(word.lower()) for word in words)
         for category, words in CATEGORY_WORDS.items()
@@ -449,29 +556,46 @@ def find_hotspots(items, duration, config=None):
             peak_groups.append([peak])
 
     candidates = []
-    quiet_seconds = max(1, int(config.get("boundary_quiet_seconds", 3)))
+    quiet_seconds = max(1, int(config.get("boundary_quiet_seconds", 4)))
     search_seconds = max(quiet_seconds, int(config.get("boundary_search_seconds", 60)))
-    pre_roll = int(config.get("pre_roll_seconds", 5))
+    pre_roll = max(0, int(config.get("pre_roll_seconds", 10)))
     post_roll = int(config.get("post_roll_seconds", 2))
+    start_quantile = float(config.get("boundary_start_quantile", 0.05))
+    end_quantile = float(config.get("boundary_end_quantile", 0.92))
     min_clip = int(config.get("min_clip_seconds", 10))
     max_clip = int(config.get("max_clip_seconds", 45))
     for group_index, group in enumerate(peak_groups):
         strongest = max(group, key=lambda item: (item["peak_height"], item["prominence"]))
-        thresholds = [_boundary_threshold(boundary_curve, item["peak"], config)[2] for item in group]
+        boundary_stats = [_boundary_threshold(boundary_curve, item["peak"], config) for item in group]
+        thresholds = [item[2] for item in boundary_stats]
         threshold = min(thresholds)
+        event_baseline = min(item[0] for item in boundary_stats)
         onset, left_found = _find_quiet_boundary(
             boundary_curve, group[0]["peak"], -1, threshold, quiet_seconds, search_seconds,
         )
         decay, right_found = _find_quiet_boundary(
             boundary_curve, group[-1]["peak"], 1, threshold, quiet_seconds, search_seconds,
         )
-        start = max(0, onset - pre_roll)
-        end = min(duration, decay + post_roll)
+        body_start = _excess_quantile_boundary(
+            boundary_curve, onset, decay, event_baseline, start_quantile,
+        )
+        body_start = min(body_start, group[0]["peak"])
+        body_end = _excess_quantile_boundary(
+            boundary_curve, onset, decay, event_baseline, end_quantile,
+        )
+        start = max(0, body_start - pre_roll)
+        end = min(duration, max(body_end, group[-1]["peak"]) + post_roll)
         clipped_by_max = False
         if end - start > max_clip:
             clipped_by_max = True
-            anchor_start = max(start, strongest["peak"] - pre_roll - quiet_seconds)
-            start = min(anchor_start, max(0, end - max_clip))
+            # Preserve the detected beginning and trim the low-energy tail. For
+            # exceptionally broad build-ups, still keep substantially more
+            # context than the old peak-(pre_roll+quiet) anchor allowed.
+            if strongest["peak"] > start + max_clip:
+                peak_position_ratio = min(max(
+                    float(config.get("max_clip_peak_position_ratio", 0.65)), 0.1,
+                ), 0.9)
+                start = max(0, strongest["peak"] - max_clip * peak_position_ratio)
             end = min(duration, start + max_clip)
         if end - start < min_clip:
             missing = min_clip - (end - start)
@@ -525,6 +649,8 @@ def find_hotspots(items, duration, config=None):
             "discussion_ratio": round(reaction["discussion_ratio"], 3),
             "reaction_span": round(reaction["reaction_span"], 3),
             "boundary_threshold": round(threshold, 3),
+            "event_baseline": round(event_baseline, 3),
+            "body_start": round(body_start, 3), "body_end": round(body_end, 3),
             "boundary_confidence": "both" if left_found and right_found else "partial",
             "clipped_by_max": clipped_by_max,
         })

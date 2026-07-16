@@ -144,7 +144,25 @@ class Config():
                 raise ValueError('DMH 配置必须声明 task_type: highlight。')
             defaults = deepcopy(raw.get('defaults') or {})
             defaults.setdefault('source', {}).setdefault('min_segment_duration', 30)
+            defaults.setdefault('source', {}).setdefault('subtitle', 'available')
             defaults.setdefault('upload', {}).setdefault('common', {}).setdefault('engine', 'biliwebapi')
+            encoding = defaults.setdefault('encoding', {})
+            encoding.setdefault('mode', 'copy')
+            encoding.setdefault('copy_fallback', 'reencode')
+            encoding.setdefault('keyframe_alignment', 'outward')
+            encoding.setdefault('keep_clips', True)
+            detection = defaults.setdefault('analysis', {}).setdefault('detection', {})
+            for key, value in {
+                'boundary_quiet_seconds': 4,
+                'pre_roll_seconds': 10,
+                'boundary_start_quantile': 0.05,
+                'boundary_end_quantile': 0.92,
+                'peak_merge_max_gap_seconds': 45,
+                'peak_merge_valley_ratio': 0.25,
+                'peak_merge_quiet_seconds': 6,
+                'max_clip_peak_position_ratio': 0.65,
+            }.items():
+                detection.setdefault(key, value)
             targets = raw.get('targets') or {}
             if not isinstance(targets, dict) or not targets:
                 raise ValueError('热点任务至少需要配置一个 targets 直播任务。')

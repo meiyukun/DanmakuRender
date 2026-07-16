@@ -224,8 +224,11 @@ class DanmakuRender():
         for task_info in self.engine.task_dict.values():
             if task_info.get('task_type') != 'highlight':
                 continue
-            jobs = getattr(task_info.get('class'), 'jobs', {})
-            active_jobs = [job for job in jobs.values() if job.get('status') in active_highlight_statuses]
+            highlight_task = task_info.get('class')
+            jobs = getattr(highlight_task, 'jobs', {})
+            recovered = getattr(highlight_task, 'recovered_job_ids', set())
+            active_jobs = [job for job_id, job in jobs.items()
+                           if job_id not in recovered and job.get('status') in active_highlight_statuses]
             if active_jobs:
                 blocking.append(f'热点剪辑任务 {len(active_jobs)} 个')
 
