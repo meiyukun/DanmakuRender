@@ -9,6 +9,7 @@
 - `dryrun.py` 默认安全测试“短时录制→整场结束→热点分析/混剪”，关闭上传、普通渲染、平台转录和清理；支持 `--duration`、`--wait-timeout`、`--ensure-output`、`--allow-upload` 与 `--regular-pipeline`。
 - `--ensure-output` 只在短样本没有真实热点时生成带 `test_fallback` 标记的10秒测试片段，用于验证FFmpeg成片链路，不影响正式任务判断。
 - 新增 `source.min_segment_duration`，默认忽略短于30秒的录制碎片，并在任务状态和清单记录被忽略分段。
+- 原始弹幕 JSONL 改为无版本号的紧凑格式：过滤 `other/others` 和无文本事件，仅保留分段相对 `video_time`、类型、发送者和文本；解析器不再兼容旧 JSONL 字段。
 - 热点任务可复用已有弹幕视频/字幕，也可按独立配置请求渲染或转录；等待有超时，失败原因持久化并释放源文件。
 - 热点上传配置与普通回放上传完全分离，支持通用上传参数和按输出方案覆盖；默认关闭上传。
 - Web API 增加独立热点流水线状态。

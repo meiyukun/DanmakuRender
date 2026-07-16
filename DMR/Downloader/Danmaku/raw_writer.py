@@ -1,30 +1,10 @@
-import base64
 import json
 import os
 import threading
-from datetime import date, datetime
-
-
-def _json_safe(value, depth=0):
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, bytes):
-        return {"encoding": "base64", "data": base64.b64encode(value).decode("ascii")}
-    if depth >= 8:
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item, depth + 1) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(item, depth + 1) for item in value]
-    if hasattr(value, "__dict__"):
-        return _json_safe(vars(value), depth + 1)
-    return str(value)
 
 
 class RawDanmakuWriter:
-    """Line-oriented lossless sidecar written before ASS display filtering."""
+    """Compact line-oriented sidecar written before ASS display filtering."""
 
     def __init__(self, enabled=True):
         self.enabled = bool(enabled)
@@ -45,26 +25,24 @@ class RawDanmakuWriter:
         if not self.enabled or self._file is None:
             return False
         attributes = dict(vars(danmaku))
+        dtype = str(attributes.get("dtype") or "").lower()
+        text = attributes.get("text") or attributes.get("content")
+        # Unknown protocol/control messages contain no useful hotspot material and
+        # previously accounted for most records in Douyin raw sidecars.
+        if dtype in ("", "other", "others") or not text:
+            return False
         record = {
-            "version": 1,
             "video_time": attributes.get("time"),
-            "timestamp": attributes.get("timestamp"),
-            "received_at": datetime.now().timestamp(),
-            "type": attributes.get("dtype"),
+            "type": dtype,
             "sender": {
                 "name": attributes.get("uname"),
                 "uid": next((attributes.get(key) for key in (
                     "uid", "user_id", "userid", "userId", "open_id", "user_unique_id"
                 ) if attributes.get(key) is not None), None),
             },
-            "color": attributes.get("color"),
-            "content": attributes.get("content"),
-            "text": attributes.get("text"),
-            "source_url": source_url,
-            "class": danmaku.__class__.__name__,
-            "data": attributes,
+            "text": str(text),
         }
-        line = json.dumps(_json_safe(record), ensure_ascii=False, separators=(",", ":"))
+        line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
         with self._lock:
             self._file.write(line + "\n")
         return True

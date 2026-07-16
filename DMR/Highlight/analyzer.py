@@ -133,7 +133,7 @@ def parse_danmaku(path, offset=0.0, allowed_types=None):
                     dtype = str(record.get("type") or "other")
                     if allowed_types and dtype not in allowed_types:
                         continue
-                    text = _clean_text(record.get("text") or record.get("content"))
+                    text = _clean_text(record.get("text"))
                     timestamp = float(record.get("video_time"))
                     if not text:
                         continue
