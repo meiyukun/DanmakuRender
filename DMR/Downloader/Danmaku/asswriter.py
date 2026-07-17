@@ -51,6 +51,10 @@ class AssWriter():
         self.repeat_danmaku = repeat_danmaku if isinstance(repeat_danmaku, dict) else {}
         self.repeat_enabled = bool(self.repeat_danmaku.get('enabled', False))
         self.repeat_timeout = max(float(self.repeat_danmaku.get('session_timeout', 8)), 0.1)
+        self.repeat_hot_duration = max(
+            float(self.repeat_danmaku.get('hot_duration', 8)),
+            0.1,
+        )
         self.repeat_color_threshold = max(int(self.repeat_danmaku.get('color_threshold', 6)), 1)
         self.repeat_color = str(self.repeat_danmaku.get('color', 'ff9900')).lstrip('#').zfill(6)
         self.repeat_hot_line_spacing = max(
@@ -66,7 +70,7 @@ class AssWriter():
             1.0,
         )
         self.repeat_pre_hot_max_width = min(
-            max(float(self.repeat_danmaku.get('pre_hot_max_width', 0.75)), 0.0),
+            max(float(self.repeat_danmaku.get('pre_hot_max_width', 0)), 0.0),
             1.0,
         )
         self.repeat_hot_min_font_scale = max(
@@ -77,7 +81,7 @@ class AssWriter():
             int(self.repeat_danmaku.get('hot_max_visible', 0)),
             0,
         )
-        self.repeat_hot_ellipsis = bool(self.repeat_danmaku.get('hot_ellipsis', True))
+        self.repeat_hot_ellipsis = bool(self.repeat_danmaku.get('hot_ellipsis', False))
         self.repeat_fonts_dir = os.path.abspath(
             os.path.expanduser(str(self.repeat_danmaku.get('fonts_dir', './fonts')))
         )
@@ -98,7 +102,8 @@ class AssWriter():
             1,
         )
         self._repeat_sessions = {}
-        self._completed_hot_sessions = []
+        self._hot_flights = []
+        self._pending_hot_keys = set()
 
         self.meta_info = [
             '[Script Info]',
@@ -383,7 +388,8 @@ class AssWriter():
             self._filename = filename
             self._track_tails = [None for _ in range(self._ntracks)]
             self._repeat_sessions = {}
-            self._completed_hot_sessions = []
+            self._hot_flights = []
+            self._pending_hot_keys = set()
             with open(filename,'w',encoding='utf-8') as f:
                 for info in self.meta_info:
                     f.write(info+'\n')
@@ -404,30 +410,33 @@ class AssWriter():
         display_color = danmu.color
         display_content = danmu.text.replace('\n',' ').replace('\r',' ')
         if self.repeat_enabled:
-            self._expire_repeat_sessions(danmu.time)
+            self._advance_hot_state(danmu.time)
             session = self._get_repeat_session(danmu)
             session['count'] += 1
             session['last_time'] = danmu.time
             count = session['count']
             if count >= self.repeat_hot_threshold:
-                session['hot_events'].append((danmu.time, count))
+                flight = session.get('active_flight')
+                if flight and danmu.time < flight['end']:
+                    if flight['updates'][-1][0] == danmu.time:
+                        flight['updates'][-1] = (danmu.time, count)
+                    else:
+                        flight['updates'].append((danmu.time, count))
+                    flight['tail']._ass_display_text = self._hot_display_text(flight, count)
+                    flight['tail']._ass_length = self._hot_width(flight, count)
+                else:
+                    session['pending_since'] = danmu.time
+                    self._pending_hot_keys.add(session['key'])
+                    self._schedule_pending_hot(danmu.time)
                 return True
             if count >= self.repeat_color_threshold:
                 display_color = self.repeat_color
             display_content = self._fit_pre_hot_content(display_content)
 
-        tid, max_dist = 0, -1e5
-        
-        # 计算给出弹幕到指定弹幕的距离
-        def tail_dist(tail_dm:SimpleDanmaku, tic:float):
-            if not tail_dm:
-                return 1e5
-            dm_length = self._get_length(tail_dm.text)
-            dist = (tic - tail_dm.time) * (dm_length + self.width) / self.dmduration - dm_length 
-            return dist
+        tid, max_dist = None, -1e5
         
         for i, tail_dm in enumerate(self._track_tails):
-            dist = tail_dist(tail_dm, danmu.time)
+            dist = self._tail_distance(tail_dm, danmu.time)
             if dist > 0.2 * self.width and dist > self.margin_w:
                 tid = i
                 max_dist = dist
@@ -436,7 +445,7 @@ class AssWriter():
                 max_dist = dist
                 tid = i
         
-        if calc_collision and max_dist < self.margin_w:
+        if tid is None or (calc_collision and max_dist < self.margin_w):
             return False
         
         dm_length = self._get_length(display_content)
@@ -463,8 +472,23 @@ class AssWriter():
         with self._lock, open(self._filename, 'a', encoding='utf-8') as f:
             f.write(dm_info + '\n')
         
+        danmu._ass_display_text = display_content
         self._track_tails[tid] = danmu
         return True
+
+    def _tail_distance(self, tail_dm, current_time):
+        """计算前一条滚动弹幕尾部与屏幕右边缘的距离。"""
+        if not tail_dm:
+            return 1e5
+        text = getattr(tail_dm, '_ass_display_text', tail_dm.text)
+        dm_length = getattr(tail_dm, '_ass_length', None)
+        if dm_length is None:
+            dm_length = self._get_length(text)
+        duration = max(float(getattr(tail_dm, '_ass_duration', self.dmduration)), 0.1)
+        return (
+            (current_time - tail_dm.time) * (dm_length + self.width) / duration
+            - dm_length
+        )
 
     @staticmethod
     def _normalize_repeat_text(text):
@@ -516,7 +540,9 @@ class AssWriter():
                 'text': danmu.text,
                 'count': 0,
                 'last_time': danmu.time,
-                'hot_events': [],
+                'active_flight': None,
+                'last_flight_end': None,
+                'pending_since': None,
             }
             self._repeat_sessions[key] = session
         elif key.startswith('reaction:') and len(danmu.text) > len(session['text']):
@@ -524,119 +550,166 @@ class AssWriter():
             session['text'] = danmu.text
         return session
 
-    def _expire_repeat_sessions(self, current_time):
-        expired = [
-            key for key, session in self._repeat_sessions.items()
-            if current_time - session['last_time'] >= self.repeat_timeout
-        ]
-        for key in expired:
-            session = self._repeat_sessions.pop(key)
-            if session['hot_events']:
-                self._completed_hot_sessions.append(session)
-
-    def _flush_repeat_sessions(self):
-        self._completed_hot_sessions.extend(
-            session for session in self._repeat_sessions.values()
-            if session['hot_events']
+    def _hot_layout(self, session):
+        style = self._style_for_count(session['count'])
+        safe_text = self._escape_ass_text(session['text'])
+        body, _, body_size, count_size, _ = self._fit_hot_content(
+            safe_text, session['count'], style
         )
-        self._repeat_sessions.clear()
-        self._write_hot_sessions()
-        self._completed_hot_sessions.clear()
+        pulse_scale = style['pulse']['scale'] if style['pulse']['enabled'] else 1.0
+        outline = max(
+            style['outline_size'],
+            style['pulse']['glow_size'] if style['pulse']['enabled'] else 0,
+        )
+        height = (
+            body_size * pulse_scale * self.repeat_hot_line_spacing
+            + outline * 2 + self.margin_h
+        )
+        pitch = self.fontsize + self.margin_h
+        span = min(max(int((height + pitch - 1) // pitch), 1), self._ntracks)
+        return style, body, body_size, count_size, span
 
-    def _write_hot_sessions(self):
-        segments = []
-        for session in self._completed_hot_sessions:
-            events = session['hot_events']
-            safe_text = self._escape_ass_text(session['text'])
-            for index, (start, count) in enumerate(events):
-                end = (
-                    events[index + 1][0]
-                    if index + 1 < len(events)
-                    else session['last_time'] + self.repeat_timeout
-                )
-                if end > start:
-                    segments.append({
-                        'start': start,
-                        'end': end,
-                        'count': count,
-                        'text': safe_text,
-                        'first_hot': events[0][0],
-                        'key': session['key'],
-                        'style': self._style_for_count(count),
-                    })
-        if not segments:
-            return
+    def _lane_blocks(self, span):
+        center = (self._ntracks - 1) / 2
+        blocks = [tuple(range(start, start + span)) for start in range(self._ntracks - span + 1)]
+        return sorted(blocks, key=lambda lanes: (abs(sum(lanes) / len(lanes) - center), lanes[0]))
 
-        # 按所有热点的出现、更新和结束时间切片，使每个时间片中的热点组整体居中。
-        boundaries = sorted({
-            boundary
-            for segment in segments
-            for boundary in (segment['start'], segment['end'])
-        })
-        region_top = self.dst
-        region_bottom = self.dst + (self.height - self.dst) * self.dmrate
-        region_height = region_bottom - region_top
-        center_y = self.dst + ((self.height - self.dst) * self.dmrate) / 2
-        lines = []
-        for start, end in zip(boundaries, boundaries[1:]):
-            if end <= start:
+    def _advance_hot_state(self, current_time):
+        for session in self._repeat_sessions.values():
+            flight = session.get('active_flight')
+            if flight and flight['end'] <= current_time:
+                session['active_flight'] = None
+                session['last_flight_end'] = flight['end']
+
+        expired = []
+        for key, session in self._repeat_sessions.items():
+            if session.get('active_flight') or key in self._pending_hot_keys:
                 continue
-            # 热度优先；同数量时优先最近更新，其次优先更早成为热点，最后按文本稳定排序。
-            ranked = sorted(
-                (segment for segment in segments if segment['start'] <= start < segment['end']),
-                key=lambda segment: (
-                    -segment['count'], -segment['start'], segment['first_hot'], segment['key']
+            timeout_base = max(
+                session['last_time'],
+                session.get('last_flight_end') or session['last_time'],
+            )
+            if current_time - timeout_base >= self.repeat_timeout:
+                expired.append(key)
+        for key in expired:
+            self._repeat_sessions.pop(key, None)
+
+        self._schedule_pending_hot(current_time)
+
+    def _schedule_pending_hot(self, current_time):
+        while True:
+            active_count = sum(
+                1 for session in self._repeat_sessions.values()
+                if session.get('active_flight') and session['active_flight']['end'] > current_time
+            )
+            pending = sorted(
+                (
+                    self._repeat_sessions[key] for key in self._pending_hot_keys
+                    if key in self._repeat_sessions
+                ),
+                key=lambda session: (
+                    -session['count'], -session['last_time'],
+                    session['pending_since'], session['key'],
                 ),
             )
-            prepared = []
-            occupied_height = 0.0
-            for segment in ranked:
-                if self.repeat_hot_max_visible and len(prepared) >= self.repeat_hot_max_visible:
+            launched = False
+            for session in pending:
+                if self.repeat_hot_max_visible and active_count >= self.repeat_hot_max_visible:
                     break
-                style = segment['style']
-                body, suffix, body_size, count_size, _ = self._fit_hot_content(
-                    segment['text'], segment['count'], style
+                style, body, body_size, count_size, span = self._hot_layout(session)
+                lanes = next(
+                    (
+                        block for block in self._lane_blocks(span)
+                        if all(
+                            self._tail_distance(self._track_tails[lane], current_time)
+                            >= self.margin_w
+                            for lane in block
+                        )
+                    ),
+                    None,
                 )
-                pulse_scale = style['pulse']['scale'] if style['pulse']['enabled'] else 1.0
-                outline = max(
-                    style['outline_size'],
-                    style['pulse']['glow_size'] if style['pulse']['enabled'] else 0,
-                )
-                item_height = (
-                    body_size * pulse_scale * self.repeat_hot_line_spacing
-                    + outline * 2 + self.margin_h
-                )
-                if occupied_height + item_height > region_height:
+                if lanes is None:
                     continue
-                item = dict(segment)
-                item.update({
+
+                launch_time = current_time
+                end_time = launch_time + self.repeat_hot_duration
+                pitch = self.fontsize + self.margin_h
+                y = self.dst + (sum(lanes) / len(lanes) + 0.5) * pitch
+                flight = {
+                    'key': session['key'],
+                    'start': launch_time,
+                    'end': end_time,
+                    'lanes': lanes,
+                    'y': y,
+                    'style': style,
                     'body': body,
-                    'suffix': suffix,
                     'body_size': body_size,
                     'count_size': count_size,
-                    'height': item_height,
-                })
-                prepared.append(item)
-                occupied_height += item_height
+                    'updates': [(launch_time, session['count'])],
+                }
+                tail = SimpleDanmaku(
+                    time=launch_time, dtype='danmaku', uname='',
+                    content=session['text'], text=session['text'], color=style['color'],
+                )
+                tail._ass_duration = self.repeat_hot_duration
+                flight['tail'] = tail
+                tail._ass_display_text = self._hot_display_text(flight, session['count'])
+                tail._ass_length = self._hot_width(flight, session['count'])
+                self._hot_flights.append(flight)
+                session['active_flight'] = flight
+                session['pending_since'] = None
+                self._pending_hot_keys.discard(session['key'])
+                for lane in lanes:
+                    self._track_tails[lane] = tail
+                active_count += 1
+                launched = True
+            if not launched:
+                break
 
-            # 排名第一放在中心，后续热点依次向上、向下展开。
-            upper = list(reversed(prepared[1::2]))
-            visual = upper + prepared[:1] + prepared[2::2]
-            cursor_y = center_y - occupied_height / 2
-            for segment in visual:
-                y = cursor_y + segment['height'] / 2
-                cursor_y += segment['height']
-                style = segment['style']
+    def _flush_repeat_sessions(self):
+        self._write_hot_flights()
+        self._repeat_sessions.clear()
+        self._pending_hot_keys.clear()
+        self._hot_flights.clear()
+
+    def _hot_display_text(self, flight, count):
+        style = flight['style']
+        return f"{flight['body']} ×{count} {style['suffix']}"
+
+    def _hot_width(self, flight, count):
+        style = flight['style']
+        suffix = f" ×{count} {style['suffix']}"
+        return (
+            self._measure_text(flight['body'], flight['body_size'], style)
+            + self._measure_text(suffix, flight['count_size'], style)
+        ) * self.repeat_hot_width_safety
+
+    def _write_hot_flights(self):
+        lines = []
+        for flight in self._hot_flights:
+            style = flight['style']
+            current_x = float(self.width)
+            updates = flight['updates']
+            for index, (start, count) in enumerate(updates):
+                end = updates[index + 1][0] if index + 1 < len(updates) else flight['end']
+                if end <= start:
+                    continue
+                width = self._hot_width(flight, count)
+                target_x = -width
+                remaining = flight['end'] - start
+                segment_duration = end - start
+                move_ms = max(int(round(remaining * 1000)), 1)
+                next_x = current_x + (target_x - current_x) * (segment_duration / remaining)
                 t0 = '%02d:%02d:%05.2f' % sec2hms(start)
                 t1 = '%02d:%02d:%05.2f' % sec2hms(end)
+                suffix = f" ×{count} {style['suffix']}"
                 content = (
-                    f"{segment['body']}"
-                    f"{{\\fs{segment['count_size']}}}{segment['suffix']}"
+                    f"{flight['body']}"
+                    f"{{\\fs{flight['count_size']}}}{suffix}"
                 )
                 effect = ''
-                # 仅在该热点自身的计数更新时触发；其他热点造成的时间切片不重复触发。
                 pulse = style['pulse']
-                if pulse['enabled'] and start == segment['start']:
+                if pulse['enabled']:
                     effect_ms = min(pulse['duration_ms'], int((end - start) * 1000))
                     if effect_ms > 0:
                         pulse_percent = pulse['scale'] * 100
@@ -651,16 +724,19 @@ class AssWriter():
                 font = self._escape_ass_text(style['font'])
                 lines.append(
                     f'Dialogue: 2,{t0},{t1},R2L,,0,0,0,,'
-                    f'{{\\an5\\pos({self.width // 2},{int(round(y))})'
-                    f"\\fn{font}\\fs{segment['body_size']}\\b1\\alpha&H{self.opacity}"
+                    f'{{\\an4\\move({int(round(current_x))},{int(round(flight["y"]))},'
+                    f'{int(round(target_x))},{int(round(flight["y"]))},0,{move_ms})'
+                    f"\\fn{font}\\fs{flight['body_size']}\\b1\\alpha&H{self.opacity}"
                     f"\\1c&H{RGB2BGR(style['color'])}&"
                     f"\\3c&H{RGB2BGR(style['outline_color'])}&"
                     f"\\bord{style['outline_size']:g}"
                     f'{effect}}}{content}\n'
                 )
+                current_x = next_x
 
-        with open(self._filename, 'a', encoding='utf-8') as f:
-            f.writelines(lines)
+        if lines:
+            with open(self._filename, 'a', encoding='utf-8') as f:
+                f.writelines(lines)
 
     def add_super_chat(self, super_chat: SuperChatDanmaku):
         with self._lock:
