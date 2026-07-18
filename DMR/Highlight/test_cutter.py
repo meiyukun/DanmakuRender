@@ -1,9 +1,12 @@
+import os
+import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from DMR.Highlight import Highlight, attach_subtitle_excerpts, filter_clip_candidates
 from DMR.Highlight.analyzer import select_profile
-from DMR.Highlight.cutter import keyframe_extension_seconds, map_range
+from DMR.Highlight.cutter import keyframe_extension_seconds, map_range, render_highlight
 
 
 class HighlightCutterTests(unittest.TestCase):
@@ -24,6 +27,37 @@ class HighlightCutterTests(unittest.TestCase):
     def test_keyframe_extension_counts_both_sides(self):
         pieces = [{'offset': 0, 'start': 98, 'end': 127}]
         self.assertEqual(keyframe_extension_seconds(pieces, 100, 125), 4)
+
+    @patch('DMR.Highlight.cutter._encode_piece')
+    @patch('DMR.Highlight.cutter._run')
+    @patch('DMR.Highlight.cutter._stream_signature', return_value=('same',))
+    @patch('DMR.Highlight.cutter.map_range')
+    def test_only_candidate_exceeding_six_second_extension_is_reencoded(
+            self, mapped, signature, run, encode_piece):
+        def ranges(segments, start, end, outward=False):
+            if not outward:
+                return [{'path': 'source.mp4', 'offset': 0, 'start': start, 'end': end}]
+            if start == 10:
+                return [{'path': 'source.mp4', 'offset': 0, 'start': 7, 'end': 23}]
+            return [{'path': 'source.mp4', 'offset': 0, 'start': 26, 'end': 43}]
+        mapped.side_effect = ranges
+        candidates = [
+            {'id': 'copy', 'start': 10, 'end': 20, 'category': 'funny'},
+            {'id': 'encode', 'start': 30, 'end': 40, 'category': 'funny'},
+        ]
+        os.makedirs('.temp', exist_ok=True)
+        with tempfile.TemporaryDirectory() as output_dir:
+            outputs, records, mode = render_highlight(
+                [{'path': 'source.mp4', 'offset': 0, 'duration': 60}], candidates, [],
+                output_dir, SimpleNamespace(path='source.mp4', resolution=(1920, 1080)),
+                {'mode': 'copy', 'copy_fallback': 'reencode', 'keyframe_alignment': 'outward',
+                 'format': 'mp4'}, {'id': 'all', 'name': 'all'}, Mock(),
+            )
+        self.assertFalse(outputs)
+        self.assertEqual(['copy', 'reencode'], [item['encoding_mode'] for item in records])
+        self.assertEqual('mixed', mode)
+        self.assertEqual(1, run.call_count)
+        self.assertEqual(1, encode_piece.call_count)
 
     def test_categories_filter_individual_events_without_aggregation(self):
         candidates = [

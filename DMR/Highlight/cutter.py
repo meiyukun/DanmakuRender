@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from DMR.utils import ToolsList, replace_keywords, safe_filename, uuid
 
 
-MAX_COPY_KEYFRAME_EXTENSION_SECONDS = 4.0
+MAX_COPY_KEYFRAME_EXTENSION_SECONDS = 6.0
 
 
 def _run(command, logger):
@@ -121,6 +121,10 @@ def _concat(paths, output, ffmpeg, logger):
         os.replace(partial, output)
     finally:
         try:
+            os.remove(partial)
+        except OSError:
+            pass
+        try:
             os.remove(list_path)
         except OSError:
             pass
@@ -165,38 +169,21 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
     clip_dir = os.path.join(output_dir, "clips")
     os.makedirs(clip_dir, exist_ok=True)
     requested_mode = str(config.get("mode", "copy")).lower()
-    signatures = [_stream_signature(item["path"]) for item in segments]
-    effective_mode = "copy" if requested_mode == "copy" and len(set(signatures)) == 1 else "reencode"
-    if requested_mode == "copy" and effective_mode != "copy" and config.get("copy_fallback", "reencode") != "reencode":
-        raise RuntimeError("源分段编码参数不一致，无法无重编码拼接")
-    outward = effective_mode == "copy" and config.get("keyframe_alignment", "outward") == "outward"
-    aligned_pieces = {}
-    if outward:
-        for candidate in candidates:
-            clip_id = str(candidate.get("id"))
-            pieces = map_range(segments, candidate["start"], candidate["end"], outward=True)
-            aligned_pieces[clip_id] = pieces
-            extension = keyframe_extension_seconds(pieces, candidate["start"], candidate["end"])
-            if extension > MAX_COPY_KEYFRAME_EXTENSION_SECONDS + 1e-6:
-                effective_mode = "reencode"
-                outward = False
-                aligned_pieces = {}
-                break
-    clip_records, clip_paths = [], {}
-    selected_ids = {str(item.get("id")) for item in selected}
-    for index, candidate in enumerate(sorted(candidates, key=lambda item: item["start"]), 1):
-        clip_id = str(candidate.get("id") or f"clip-{index:03d}")
-        pieces = aligned_pieces.get(clip_id) if outward else None
-        if pieces is None:
-            pieces = map_range(segments, candidate["start"], candidate["end"], outward=False)
-        if not pieces:
-            continue
-        filename = safe_filename(os.path.join(clip_dir, f"{index:03d}-{clip_id}.{format_name}"))
+    copy_fallback = config.get("copy_fallback", "reencode") == "reencode"
+    align_outward = config.get("keyframe_alignment", "outward") == "outward"
+    signature_cache = {}
+
+    def signature(path):
+        if path not in signature_cache:
+            signature_cache[path] = _stream_signature(path)
+        return signature_cache[path]
+
+    def encode_candidate(pieces, filename, clip_mode):
         piece_paths = []
         with tempfile.TemporaryDirectory(prefix="dmr-highlight-piece-", dir=".temp") as temp_dir:
             for piece_index, piece in enumerate(pieces):
                 piece_path = filename if len(pieces) == 1 else os.path.join(temp_dir, f"{piece_index}.{format_name}")
-                if effective_mode == "copy":
+                if clip_mode == "copy":
                     _run([ffmpeg, "-y", "-ss", str(piece["start"]), "-t", str(piece["end"] - piece["start"]),
                           "-i", piece["path"], "-map", "0:v:0", "-map", "0:a?", "-c", "copy", piece_path], logger)
                 else:
@@ -204,6 +191,45 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
                 piece_paths.append(piece_path)
             if len(piece_paths) > 1:
                 _concat(piece_paths, filename, ffmpeg, logger)
+
+    clip_records, clip_paths = [], {}
+    used_modes = []
+    selected_ids = {str(item.get("id")) for item in selected}
+    for index, candidate in enumerate(sorted(candidates, key=lambda item: item["start"]), 1):
+        clip_id = str(candidate.get("id") or f"clip-{index:03d}")
+        exact_pieces = map_range(segments, candidate["start"], candidate["end"], outward=False)
+        pieces = exact_pieces
+        clip_mode = "reencode"
+        fallback_reason = None
+        if requested_mode == "copy":
+            pieces = (map_range(segments, candidate["start"], candidate["end"], outward=True)
+                      if align_outward else exact_pieces)
+            extension = keyframe_extension_seconds(pieces, candidate["start"], candidate["end"])
+            if align_outward and extension > MAX_COPY_KEYFRAME_EXTENSION_SECONDS + 1e-6:
+                fallback_reason = f"关键帧外扩 {extension:.3f} 秒超过 {MAX_COPY_KEYFRAME_EXTENSION_SECONDS:.1f} 秒"
+            elif len({signature(piece["path"]) for piece in pieces}) > 1:
+                fallback_reason = "片段跨越的源分段媒体参数不一致"
+            else:
+                clip_mode = "copy"
+            if fallback_reason:
+                if not copy_fallback:
+                    raise RuntimeError(f"热点片段 {clip_id} 无法无重编码裁切: {fallback_reason}")
+                pieces = exact_pieces
+        if not pieces:
+            continue
+        filename = safe_filename(os.path.join(clip_dir, f"{index:03d}-{clip_id}.{format_name}"))
+        try:
+            encode_candidate(pieces, filename, clip_mode)
+        except Exception:
+            if clip_mode != "copy" or not copy_fallback:
+                raise
+            try:
+                os.remove(filename)
+            except OSError:
+                pass
+            clip_mode = "reencode"
+            pieces = exact_pieces
+            encode_candidate(pieces, filename, clip_mode)
         effective_start = pieces[0]["offset"] + pieces[0]["start"]
         effective_end = pieces[-1]["offset"] + pieces[-1]["end"]
         record = {"id": clip_id, "sequence": index, "path": filename,
@@ -218,9 +244,10 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
                   "auto_selected": clip_id in selected_ids,
                   "requested_start": candidate["start"], "requested_end": candidate["end"],
                   "effective_start": effective_start, "effective_end": effective_end,
-                  "duration": effective_end - effective_start, "encoding_mode": effective_mode}
+                  "duration": effective_end - effective_start, "encoding_mode": clip_mode}
         clip_records.append(record)
         clip_paths[clip_id] = filename
+        used_modes.append(clip_mode)
     ordered_paths = [clip_paths[str(item.get("id"))] for item in selected if str(item.get("id")) in clip_paths]
     outputs = []
     if ordered_paths:
@@ -231,7 +258,10 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
         else:
             name = f"{os.path.splitext(os.path.basename(base_info.path))[0]}-{mix['name']}"
         output_path = safe_filename(os.path.join(output_dir, f"{name}.{format_name}"))
-        _concat(ordered_paths, output_path, ffmpeg, logger)
+        if copy_fallback:
+            recompose_clips(ordered_paths, output_path, config, logger)
+        else:
+            _concat(ordered_paths, output_path, ffmpeg, logger)
         video = copy.deepcopy(base_info)
         video.path, video.file_id, video.dtype = output_path, uuid(), f"highlight_{mix['id']}"
         video.size = os.path.getsize(output_path)
@@ -239,6 +269,8 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
         video.highlight_profile, video.highlight_name = mix["id"], mix["name"]
         video.highlight_categories = mix.get("categories", ["*"])
         outputs.append(video)
+    effective_mode = (used_modes[0] if used_modes and len(set(used_modes)) == 1
+                      else "mixed" if used_modes else requested_mode)
     return outputs, clip_records, effective_mode
 
 

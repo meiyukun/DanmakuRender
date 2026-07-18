@@ -385,21 +385,10 @@ class Highlight:
             with self._lock:
                 self._save()
             if clip_candidates:
-                try:
-                    outputs, clip_records, encoding_mode = render_highlight(
-                        segments, clip_candidates, selected, output_dir, base_info, config, combined_profile, self.logger
-                    )
-                except Exception:
-                    if (str(config.get("mode", "copy")).lower() != "copy" or
-                            config.get("copy_fallback", "reencode") != "reencode"):
-                        raise
-                    self.logger.warning("无重编码裁切或拼接失败，整场回退重新编码", exc_info=True)
-                    fallback_config = dict(config)
-                    fallback_config["mode"] = "reencode"
-                    outputs, clip_records, encoding_mode = render_highlight(
-                        segments, clip_candidates, selected, output_dir, base_info,
-                        fallback_config, combined_profile, self.logger,
-                    )
+                outputs, clip_records, encoding_mode = render_highlight(
+                    segments, clip_candidates, selected, output_dir, base_info, config,
+                    combined_profile, self.logger,
+                )
             else:
                 outputs, clip_records, encoding_mode = [], [], config.get("mode", "copy")
             for output in outputs:
