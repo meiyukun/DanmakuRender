@@ -334,6 +334,90 @@ class WebApiUploadTests(unittest.TestCase):
 
 
 class WebApiHighlightLibraryTests(unittest.TestCase):
+    def test_virtual_clip_accepts_multiple_retained_ranges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = os.path.join(temp, 'source.mp4')
+            with open(source, 'wb') as file:
+                file.write(b'video')
+            api, manifest_path, client = self.make_highlight_api(temp, [])
+            with open(manifest_path, 'w', encoding='utf-8') as file:
+                json.dump({'version': 3, 'source_task': 'source',
+                           'source_segments': [{'path': source, 'offset': 0, 'duration': 100}],
+                           'initial_mix': {'clip_ids': ['virtual'], 'stale': False},
+                           'clips': [{'id': 'virtual', 'storage': 'virtual', 'revision': 1,
+                                      'original_start': 5, 'original_end': 30,
+                                      'requested_start': 5, 'requested_end': 30,
+                                      'pieces': [{'path': source, 'offset': 0, 'start': 5, 'end': 30}]}],
+                           'outputs': [], 'versions': []}, file)
+            response = client.post('/api/highlight/clip/range', json={
+                'manifest': manifest_path, 'clip_id': 'virtual', 'revision': 1,
+                'ranges': [{'start': 20, 'end': 24}, {'start': 8, 'end': 12}],
+            })
+            self.assertEqual(200, response.status_code, response.get_json())
+            clip = response.get_json()['clip']
+            self.assertEqual([{'start': 8.0, 'end': 12.0}, {'start': 20.0, 'end': 24.0}], clip['ranges'])
+            self.assertEqual([0, 1], [item['range_index'] for item in clip['pieces']])
+            self.assertEqual(8, clip['duration'])
+            self.assertEqual((8, 24), (clip['requested_start'], clip['requested_end']))
+            self.assertTrue(response.get_json()['initial_mix']['stale'])
+
+    def test_virtual_clip_rejects_range_across_missing_source_gap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = [os.path.join(temp, name) for name in ('one.mp4', 'two.mp4')]
+            for path in paths:
+                with open(path, 'wb') as file:
+                    file.write(b'video')
+            _, manifest_path, client = self.make_highlight_api(temp, [])
+            with open(manifest_path, 'w', encoding='utf-8') as file:
+                json.dump({'version': 3, 'source_task': 'source',
+                           'source_segments': [
+                               {'path': paths[0], 'offset': 0, 'duration': 10},
+                               {'path': paths[1], 'offset': 20, 'duration': 10},
+                           ], 'clips': [{'id': 'virtual', 'storage': 'virtual', 'revision': 1,
+                                        'requested_start': 1, 'requested_end': 5,
+                                        'pieces': [{'path': paths[0], 'offset': 0, 'start': 1, 'end': 5}]}],
+                           'outputs': [], 'versions': []}, file)
+            response = client.post('/api/highlight/clip/range', json={
+                'manifest': manifest_path, 'clip_id': 'virtual', 'revision': 1,
+                'ranges': [{'start': 8, 'end': 22}],
+            })
+            self.assertEqual(409, response.status_code)
+            self.assertIn('缺失', response.get_json()['message'])
+
+    def test_virtual_clip_range_updates_revision_and_pieces(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = os.path.join(temp, 'source.mp4')
+            with open(source, 'wb') as file:
+                file.write(b'video')
+            api, manifest_path, client = self.make_highlight_api(temp, [])
+            with open(manifest_path, 'w', encoding='utf-8') as file:
+                json.dump({'version': 3, 'source_task': 'source',
+                           'source_segments': [{'path': source, 'offset': 0, 'duration': 100}],
+                           'initial_mix': {'clip_ids': ['virtual'], 'stale': False},
+                           'clips': [{'id': 'virtual', 'storage': 'virtual', 'revision': 1,
+                                      'original_start': 10, 'original_end': 20,
+                                      'requested_start': 10, 'requested_end': 20,
+                                      'pieces': [{'path': source, 'offset': 0, 'start': 10, 'end': 20}]}],
+                           'outputs': [], 'versions': []}, file)
+            response = client.post('/api/highlight/clip/range', json={
+                'manifest': manifest_path, 'clip_id': 'virtual', 'start': 8, 'end': 22, 'revision': 1,
+            })
+            self.assertEqual(200, response.status_code, response.get_json())
+            clip = response.get_json()['clip']
+            self.assertEqual(2, clip['revision'])
+            self.assertEqual((10, 20), (clip['original_start'], clip['original_end']))
+            self.assertEqual((8, 22), (clip['requested_start'], clip['requested_end']))
+            self.assertEqual((8, 22), (clip['pieces'][0]['start'], clip['pieces'][0]['end']))
+            self.assertTrue(response.get_json()['initial_mix']['stale'])
+            media = client.get('/api/highlight/clip/media', query_string={
+                'manifest': manifest_path, 'clip_id': 'virtual', 'segment': 0,
+            })
+            self.assertEqual(200, media.status_code)
+            media.close()
+            result = api.get_highlight_results()[0]
+            self.assertEqual(100, result['timeline_duration'])
+            self.assertEqual([{'index': 0, 'offset': 0.0, 'duration': 100.0}], result['source_segments'])
+
     def make_highlight_api(self, temp, clips):
         manifest_path = os.path.join(temp, 'session.highlights.json')
         with open(manifest_path, 'w', encoding='utf-8') as file:
@@ -357,6 +441,12 @@ class WebApiHighlightLibraryTests(unittest.TestCase):
         self.assertIn(b'id="result-review-filter"', response.data)
         self.assertIn(b'id="clip-search"', response.data)
         self.assertIn(b'id="batch-result-manager"', response.data)
+        self.assertIn(b'id="trim-rate"', response.data)
+        self.assertIn(b'id="trim-preview-end"', response.data)
+        self.assertIn(b'id="trim-reset-saved"', response.data)
+        self.assertIn(b'id="trim-start-time"', response.data)
+        self.assertIn(b'id="trim-mark-cut-start"', response.data)
+        self.assertIn(b'id="trim-range-timeline"', response.data)
 
     def test_highlight_results_are_sorted_newest_first(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -588,6 +588,13 @@ class LiveEvents(BaseEvents):
         holds = self.highlight_holds.get(data.get('group_id'))
         if holds is not None:
             holds.discard(data.get('highlight_task'))
+            retain_id = data.get('retain_id')
+            if retain_id:
+                token = f"virtual:{os.path.realpath(retain_id)}"
+                if data.get('release_retained'):
+                    holds.discard(token)
+                else:
+                    holds.add(token)
             if not holds:
                 self.highlight_holds.pop(data.get('group_id'), None)
         self._free_state_memory()

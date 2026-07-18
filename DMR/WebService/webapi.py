@@ -14,6 +14,7 @@ import hashlib
 import subprocess
 import shutil
 import base64
+import tempfile
 from flask import Flask, request, render_template, redirect, url_for, flash, session, send_file
 from functools import wraps
 from copy import deepcopy
@@ -118,6 +119,17 @@ class WebApi:
         self.cover_job_lock = threading.Lock()
         self.cover_jobs = {}
         self.cover_executor = ThreadPoolExecutor(max_workers=2)
+        self.highlight_operation_lock = threading.Lock()
+        self.highlight_operation_file = os.path.join('.temp', 'highlight_operations.json')
+        try:
+            with open(self.highlight_operation_file, 'r', encoding='utf-8') as file:
+                self.highlight_operations = json.load(file)
+        except (OSError, ValueError):
+            self.highlight_operations = {}
+        for operation in self.highlight_operations.values():
+            if operation.get('status') in ('queued', 'running'):
+                operation.update({'status': 'failed', 'error': '程序重启，后台生成操作已中断。'})
+        self.highlight_operation_executor = ThreadPoolExecutor(max_workers=1)
         self.cover_artifact_dir = os.path.realpath(os.path.join('.temp', 'upload_covers'))
         os.makedirs(self.cover_artifact_dir, exist_ok=True)
 
@@ -255,9 +267,24 @@ class WebApi:
         @app.route('/api/upload/media')
         @self.login_required
         def upload_media_api():
-            real_path = os.path.realpath(request.args.get('path') or '')
+            requested = request.args.get('path') or ''
+            virtual = self._decode_virtual_material(requested)
+            if virtual:
+                try:
+                    manifest = self._read_highlight_manifest(virtual['manifest'])
+                    clip = next(item for item in manifest.get('clips') or []
+                                if str(item.get('id')) == virtual['clip_id'])
+                    piece = (clip.get('pieces') or [])[0]
+                    real_path = os.path.realpath(piece['path'])
+                    if real_path not in self._highlight_source_paths(manifest):
+                        raise ValueError
+                except Exception:
+                    return {'status': 'error', 'message': '虚拟热点素材不存在。'}, 404
+            else:
+                real_path = os.path.realpath(requested)
             if real_path not in self._upload_media_paths(refresh=False) or not os.path.isfile(real_path):
-                return {'status': 'error', 'message': '视频不存在或不属于上传素材库。'}, 404
+                if not virtual:
+                    return {'status': 'error', 'message': '视频不存在或不属于上传素材库。'}, 404
             mime_type = {
                 '.mkv': 'video/x-matroska', '.flv': 'video/x-flv', '.ts': 'video/mp2t',
                 '.m2ts': 'video/mp2t', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -431,16 +458,21 @@ class WebApi:
             if not isinstance(submitted_parts, list) or not 1 <= len(submitted_parts) <= 100:
                 return {'status': 'error', 'message': '请选择 1 至 100 个视频文件。'}, 400
             normalized_parts = []
+            materialized_paths = set()
             for part in submitted_parts:
                 if not isinstance(part, dict) or not part.get('path'):
                     return {'status': 'error', 'message': '分P信息无效。'}, 400
-                path = os.path.realpath(part['path'])
+                requested_path = part['path']
+                virtual = self._decode_virtual_material(requested_path)
+                path = self._export_virtual_material(virtual) if virtual else os.path.realpath(requested_path)
+                if virtual:
+                    materialized_paths.add(path)
                 part_title = (str(part.get('title')).strip() if 'title' in part
                               else os.path.splitext(os.path.basename(path))[0])
                 if not part_title or len(part_title) > 80:
                     return {'status': 'error', 'message': '每个分P名称必须为 1 至 80 个字符。'}, 400
                 normalized_parts.append({'path': path, 'title': part_title})
-            allowed = self._upload_media_paths()
+            allowed = self._upload_media_paths() | materialized_paths
             real_paths = [part['path'] for part in normalized_parts]
             if len(set(real_paths)) != len(real_paths) or any(path not in allowed for path in real_paths):
                 return {'status': 'error', 'message': '包含重复、无效或不允许上传的文件。'}, 400
@@ -664,6 +696,97 @@ class WebApi:
                 return {'status': 'error', 'message': '文件不存在或不属于该热点任务。'}, 404
             return send_file(real_path, conditional=True)
 
+        @app.route('/api/highlight/clip/media')
+        @self.login_required
+        def highlight_clip_media_api():
+            try:
+                manifest = self._read_highlight_manifest(request.args.get('manifest'))
+                clip = next(item for item in manifest.get('clips') or []
+                            if str(item.get('id')) == str(request.args.get('clip_id')))
+                if request.args.get('segment') is not None:
+                    source = (manifest.get('source_segments') or [])[int(request.args.get('segment'))]
+                else:
+                    source = (clip.get('pieces') or [])[int(request.args.get('piece', 0))]
+                real_path = os.path.realpath(source.get('path') or '')
+                allowed = self._highlight_source_paths(manifest)
+                if real_path not in allowed or not os.path.isfile(real_path):
+                    raise ValueError('热点源视频不存在。')
+                return send_file(real_path, conditional=True)
+            except Exception as error:
+                return {'status': 'error', 'message': str(error)}, 404
+
+        @app.route('/api/highlight/clip/range', methods=['POST'])
+        @self.login_required
+        def highlight_clip_range_api():
+            payload = request.get_json(silent=True) or {}
+            try:
+                manifest_path = payload.get('manifest')
+                manifest = self._read_highlight_manifest(manifest_path)
+                clip = next(item for item in manifest.get('clips') or []
+                            if str(item.get('id')) == str(payload.get('clip_id')))
+                if clip.get('storage') != 'virtual':
+                    raise ValueError('只有虚拟热点片段可以调整范围。')
+                revision = int(payload.get('revision'))
+                if revision != int(clip.get('revision', 1)):
+                    raise ValueError('片段已在其他页面修改，请刷新后重试。')
+                segments = manifest.get('source_segments') or []
+                total = max((float(item.get('offset', 0)) + float(item.get('duration', 0))
+                             for item in segments), default=0)
+                requested_ranges = payload.get('ranges')
+                if requested_ranges is None:
+                    requested_ranges = [{'start': float(payload.get('start')),
+                                         'end': float(payload.get('end'))}]
+                from DMR.Highlight.cutter import map_range, map_ranges, normalize_ranges, write_manifest
+                ranges = normalize_ranges(requested_ranges, minimum_duration=1.0, max_ranges=50)
+                if ranges[-1]['end'] > total + .001:
+                    raise ValueError('保留区间必须位于整场直播内。')
+                for value in ranges:
+                    mapped = map_range(segments, value['start'], value['end'], outward=False)
+                    mapped_duration = sum(float(item['end']) - float(item['start']) for item in mapped)
+                    if not mapped or mapped_duration < value['end'] - value['start'] - 1e-3:
+                        raise ValueError('保留区间包含缺失的视频分段。')
+                pieces = map_ranges(segments, ranges, outward=False)
+                start, end = ranges[0]['start'], ranges[-1]['end']
+                duration = sum(value['end'] - value['start'] for value in ranges)
+                clip.update({'requested_start': start, 'requested_end': end,
+                             'effective_start': start, 'effective_end': end,
+                             'ranges': ranges, 'duration': duration, 'pieces': pieces,
+                             'revision': revision + 1, 'export_stale': bool(clip.get('export_path'))})
+                initial = manifest.setdefault('initial_mix', {})
+                if str(clip.get('id')) in [str(value) for value in initial.get('clip_ids') or []]:
+                    initial['stale'] = True
+                write_manifest(manifest_path, manifest)
+                return {'status': 'success', 'clip': clip, 'initial_mix': initial}
+            except Exception as error:
+                return {'status': 'error', 'message': str(error)}, 409
+
+        @app.route('/api/highlight/initial-mix/generate', methods=['POST'])
+        @self.login_required
+        def highlight_initial_mix_generate_api():
+            payload = request.get_json(silent=True) or {}
+            try:
+                manifest_path = os.path.realpath(payload.get('manifest') or '')
+                self._read_highlight_manifest(manifest_path)
+                operation_id = uuid()
+                operation = {'id': operation_id, 'kind': 'initial_mix', 'manifest': manifest_path,
+                             'status': 'queued', 'created_at': datetime.now().isoformat()}
+                with self.highlight_operation_lock:
+                    self.highlight_operations[operation_id] = operation
+                    atomic_json_dump(self.highlight_operations, self.highlight_operation_file)
+                self.highlight_operation_executor.submit(self._generate_initial_mix, operation_id)
+                return {'status': 'success', 'operation_id': operation_id}, 202
+            except Exception as error:
+                return {'status': 'error', 'message': str(error)}, 400
+
+        @app.route('/api/highlight/operation/status')
+        @self.login_required
+        def highlight_operation_status_api():
+            with self.highlight_operation_lock:
+                operation = deepcopy(self.highlight_operations.get(request.args.get('id')))
+            if not operation:
+                return {'status': 'error', 'message': '操作不存在。'}, 404
+            return {'status': 'success', 'operation': operation}
+
         @app.route('/api/highlight/thumbnail')
         @self.login_required
         def highlight_thumbnail_api():
@@ -698,6 +821,38 @@ class WebApi:
                 return send_file(thumbnail_path, mimetype='image/jpeg', conditional=True, max_age=86400)
             except Exception as error:
                 return {'status': 'error', 'message': f'生成预览图失败: {error}'}, 500
+
+        @app.route('/api/highlight/clip/thumbnail')
+        @self.login_required
+        def highlight_clip_thumbnail_api():
+            try:
+                manifest_path, clip_id = request.args.get('manifest'), request.args.get('clip_id')
+                manifest = self._read_highlight_manifest(manifest_path)
+                clip = next(item for item in manifest.get('clips') or [] if str(item.get('id')) == str(clip_id))
+                if int(request.args.get('revision', clip.get('revision', 1))) != int(clip.get('revision', 1)):
+                    raise ValueError('缩略图修订号已过期。')
+                piece = (clip.get('pieces') or [])[0]
+                source = os.path.realpath(piece['path'])
+                if source not in self._highlight_source_paths(manifest) or not os.path.isfile(source):
+                    raise ValueError('热点源视频不存在。')
+                stat = os.stat(source)
+                key = hashlib.sha256(f'{source}|{stat.st_size}|{stat.st_mtime_ns}|{clip_id}|{clip.get("revision", 1)}'.encode()).hexdigest()
+                cache_dir = os.path.realpath(os.path.join('.temp', 'highlight-thumbnails'))
+                target = os.path.join(cache_dir, key + '.jpg')
+                with self.highlight_thumbnail_lock:
+                    if not os.path.isfile(target):
+                        os.makedirs(cache_dir, exist_ok=True)
+                        temporary = target + '.part.jpg'
+                        command = [ToolsList.get('ffmpeg') or 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+                                   '-ss', str(piece['start']), '-i', source, '-frames:v', '1',
+                                   '-vf', 'scale=480:-2', '-q:v', '4', temporary]
+                        result = subprocess.run(command, capture_output=True, timeout=30, check=False)
+                        if result.returncode or not os.path.isfile(temporary):
+                            raise RuntimeError(result.stderr.decode('utf-8', errors='replace'))
+                        os.replace(temporary, target)
+                return send_file(target, mimetype='image/jpeg', conditional=True, max_age=86400)
+            except Exception as error:
+                return {'status': 'error', 'message': str(error)}, 404
 
         @app.route('/api/highlight/recompose', methods=['POST'])
         @self.login_required
@@ -758,8 +913,13 @@ class WebApi:
                     clip_id = str(material.get('clip_id'))
                     clip = next((item for item in manifest.get('clips') or []
                                  if str(item.get('id')) == clip_id), None)
-                    if not clip or os.path.realpath(clip.get('path', '')) not in self._highlight_media_paths(manifest_path):
+                    if not clip:
                         raise ValueError(f'热点小片段不存在: {clip_id}')
+                    if clip.get('storage') != 'virtual' and os.path.realpath(clip.get('path', '')) not in self._highlight_media_paths(manifest_path):
+                        raise ValueError(f'热点小片段文件不存在: {clip_id}')
+                    requested_revision = material.get('revision')
+                    if requested_revision is not None and int(requested_revision) != int(clip.get('revision', 1)):
+                        raise ValueError(f'热点小片段已被修改: {clip_id}')
                     resolved.append({'manifest': os.path.realpath(manifest_path), 'clip': clip})
                 host_path = resolved[0]['manifest']
                 host = self._read_highlight_manifest(host_path)
@@ -767,7 +927,8 @@ class WebApi:
                 used_numbers = [int(match.group(1)) for item in versions
                                 if (match := re.fullmatch(r'custom-v(\d+)', str(item.get('id', ''))))]
                 version_id = f'custom-v{max(used_numbers, default=0) + 1}'
-                extension = os.path.splitext(resolved[0]['clip']['path'])[1] or '.mp4'
+                first_path = resolved[0]['clip'].get('path') or ((resolved[0]['clip'].get('pieces') or [{}])[0].get('path'))
+                extension = os.path.splitext(first_path or '')[1] or '.mp4'
                 version_name, file_stem = self._highlight_output_name(payload.get('output_name'), version_id)
                 output = safe_filename(os.path.join(os.path.dirname(host_path), f'{file_stem}{extension}'))
                 highlight_info = next((info for info in self.engine.task_dict.values()
@@ -777,12 +938,23 @@ class WebApi:
                             if os.path.realpath(item.get('manifest') or '') == host_path), None)
                 config = deepcopy((job or {}).get('config', {}).get('encoding') or
                                   getattr(highlight_task, 'config', {}).get('defaults', {}).get('encoding', {}))
-                from DMR.Highlight.cutter import recompose_clips, write_manifest
-                recompose_clips([item['clip']['path'] for item in resolved], output, config, self.logger)
+                from DMR.Highlight.cutter import materialize_clip, recompose_clips, write_manifest
+                with tempfile.TemporaryDirectory(prefix='dmr-highlight-web-', dir='.temp') as temp_dir:
+                    paths = []
+                    for index, item in enumerate(resolved):
+                        clip = item['clip']
+                        if clip.get('storage') == 'virtual':
+                            path = os.path.join(temp_dir, f'{index:03d}{extension}')
+                            materialize_clip(clip, path, config, self.logger)
+                        else:
+                            path = clip['path']
+                        paths.append(path)
+                    recompose_clips(paths, output, config, self.logger)
                 record = {
                     'id': version_id, 'name': version_name, 'path': output,
                     'clip_ids': [str(item['clip']['id']) for item in resolved],
-                    'materials': [{'manifest': item['manifest'], 'clip_id': str(item['clip']['id'])}
+                    'materials': [{'manifest': item['manifest'], 'clip_id': str(item['clip']['id']),
+                                   'revision': int(item['clip'].get('revision', 1))}
                                   for item in resolved],
                     'duration': sum(float(item['clip'].get('duration', 0)) for item in resolved),
                     'uploaded': False, 'created_at': datetime.now().isoformat(),
@@ -809,11 +981,15 @@ class WebApi:
                 item = next((value for value in manifest.get(collection, []) if str(value.get('id')) == artifact_id), None)
                 if not item:
                     raise ValueError('文件记录不存在。')
-                path = os.path.realpath(item.get('path', ''))
-                if path not in self._highlight_media_paths(manifest_path):
-                    raise ValueError('文件不属于该热点任务。')
-                if os.path.exists(path):
-                    os.remove(path)
+                path_value = item.get('path') or item.get('export_path')
+                if path_value:
+                    path = os.path.realpath(path_value)
+                    if path not in self._highlight_media_paths(manifest_path):
+                        raise ValueError('文件不属于该热点任务。')
+                    if os.path.exists(path):
+                        os.remove(path)
+                elif item.get('storage') != 'virtual':
+                    raise ValueError('文件记录缺少路径。')
                 manifest[collection].remove(item)
                 from DMR.Highlight.cutter import write_manifest
                 write_manifest(manifest_path, manifest)
@@ -1359,7 +1535,7 @@ class WebApi:
             raise ValueError('热点清单不存在。')
         with open(real_path, 'r', encoding='utf-8') as file:
             manifest = json.load(file)
-        if manifest.get('version') not in (1, 2):
+        if manifest.get('version') not in (1, 2, 3):
             raise ValueError('热点清单版本不受支持。')
         return manifest
 
@@ -1383,7 +1559,116 @@ class WebApi:
         paths.extend(item.get('path') for item in manifest.get('clips') or [])
         paths.extend(item.get('path') for item in manifest.get('outputs') or [])
         paths.extend(item.get('path') for item in manifest.get('versions') or [])
+        paths.extend(item.get('export_path') for item in manifest.get('clips') or [])
         return {os.path.realpath(path) for path in paths if path}
+
+    @staticmethod
+    def _highlight_source_paths(manifest):
+        paths = [item.get('path') for item in manifest.get('source_segments') or []]
+        for clip in manifest.get('clips') or []:
+            paths.extend(item.get('path') for item in clip.get('pieces') or [])
+        return {os.path.realpath(path) for path in paths if path}
+
+    @staticmethod
+    def _encode_virtual_material(manifest, clip):
+        payload = json.dumps({'manifest': os.path.realpath(manifest), 'clip_id': str(clip.get('id')),
+                              'revision': int(clip.get('revision', 1))}, ensure_ascii=False).encode('utf-8')
+        return 'highlight-virtual:' + base64.urlsafe_b64encode(payload).decode('ascii').rstrip('=')
+
+    @staticmethod
+    def _decode_virtual_material(value):
+        if not str(value).startswith('highlight-virtual:'):
+            return None
+        try:
+            encoded = str(value).split(':', 1)[1]
+            encoded += '=' * (-len(encoded) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(encoded).decode('utf-8'))
+            return {'manifest': os.path.realpath(payload['manifest']), 'clip_id': str(payload['clip_id']),
+                    'revision': int(payload['revision'])}
+        except Exception:
+            return None
+
+    def _export_virtual_material(self, descriptor):
+        manifest = self._read_highlight_manifest(descriptor['manifest'])
+        clip = next(item for item in manifest.get('clips') or []
+                    if str(item.get('id')) == descriptor['clip_id'])
+        if int(clip.get('revision', 1)) != descriptor['revision']:
+            raise ValueError('热点片段范围已修改，请刷新素材库后重新选择。')
+        current = clip.get('export_path')
+        if current and int(clip.get('export_revision', 0)) == descriptor['revision'] and os.path.isfile(current):
+            return os.path.realpath(current)
+        highlight_info = next((info for info in self.engine.task_dict.values()
+                               if info.get('task_type') == 'highlight'), None) if self.engine else None
+        highlight_task = (highlight_info or {}).get('class')
+        job = next((item for item in getattr(highlight_task, 'jobs', {}).values()
+                    if os.path.realpath(item.get('manifest') or '') == descriptor['manifest']), None)
+        config = deepcopy((job or {}).get('config', {}).get('encoding') or
+                          getattr(highlight_task, 'config', {}).get('defaults', {}).get('encoding', {}))
+        extension = config.get('format', 'mp4')
+        export_dir = os.path.join(os.path.dirname(descriptor['manifest']), 'exports')
+        os.makedirs(export_dir, exist_ok=True)
+        target = safe_filename(os.path.join(export_dir, f"{clip.get('sequence', 0):03d}-{clip['id']}.{extension}"))
+        temporary = target + '.new.' + extension
+        from DMR.Highlight.cutter import materialize_clip, write_manifest
+        materialize_clip(clip, temporary, config, self.logger)
+        os.replace(temporary, target)
+        clip.update({'export_path': target, 'export_revision': descriptor['revision'], 'export_stale': False})
+        write_manifest(descriptor['manifest'], manifest)
+        self.upload_library_cache['time'] = 0
+        return os.path.realpath(target)
+
+    def _generate_initial_mix(self, operation_id):
+        with self.highlight_operation_lock:
+            operation = self.highlight_operations[operation_id]
+            operation['status'] = 'running'
+            atomic_json_dump(self.highlight_operations, self.highlight_operation_file)
+        try:
+            manifest_path = operation['manifest']
+            manifest = self._read_highlight_manifest(manifest_path)
+            clips = {str(item.get('id')): item for item in manifest.get('clips') or []}
+            clip_ids = [str(value) for value in (manifest.get('initial_mix') or {}).get('clip_ids') or []]
+            selected = [clips[value] for value in clip_ids if value in clips]
+            if not selected:
+                raise ValueError('系统推荐列表为空，无法生成混剪。')
+            highlight_info = next((info for info in self.engine.task_dict.values()
+                                   if info.get('task_type') == 'highlight'), None) if self.engine else None
+            highlight_task = (highlight_info or {}).get('class')
+            job = next((item for item in getattr(highlight_task, 'jobs', {}).values()
+                        if os.path.realpath(item.get('manifest') or '') == manifest_path), None)
+            config = deepcopy((job or {}).get('config', {}).get('encoding') or
+                              getattr(highlight_task, 'config', {}).get('defaults', {}).get('encoding', {}))
+            extension = config.get('format', 'mp4')
+            initial = manifest.setdefault('initial_mix', {})
+            revision = int(initial.get('revision', 0)) + 1
+            output = safe_filename(os.path.join(os.path.dirname(manifest_path),
+                                                f'系统推荐混剪-v{revision}.{extension}'))
+            from DMR.Highlight.cutter import materialize_clip, recompose_clips, write_manifest
+            with tempfile.TemporaryDirectory(prefix='dmr-highlight-initial-', dir='.temp') as temp_dir:
+                paths = []
+                for index, clip in enumerate(selected):
+                    if clip.get('storage') == 'virtual':
+                        path = os.path.join(temp_dir, f'{index:03d}.{extension}')
+                        materialize_clip(clip, path, config, self.logger)
+                    else:
+                        path = clip['path']
+                    paths.append(path)
+                recompose_clips(paths, output, config, self.logger)
+            record = {'path': output, 'dtype': 'highlight_initial',
+                      'duration': sum(float(item.get('duration', 0)) for item in selected),
+                      'revision': revision, 'created_at': datetime.now().isoformat(),
+                      'clip_revisions': {str(item['id']): int(item.get('revision', 1)) for item in selected}}
+            manifest.setdefault('outputs', []).append(record)
+            initial.update({'status': 'generated', 'stale': False, 'revision': revision})
+            write_manifest(manifest_path, manifest)
+            with self.highlight_operation_lock:
+                operation.update({'status': 'completed', 'output': record, 'completed_at': datetime.now().isoformat()})
+                atomic_json_dump(self.highlight_operations, self.highlight_operation_file)
+        except Exception as error:
+            self.logger.exception('生成系统推荐热点混剪失败')
+            with self.highlight_operation_lock:
+                operation.update({'status': 'failed', 'error': str(error),
+                                  'completed_at': datetime.now().isoformat()})
+                atomic_json_dump(self.highlight_operations, self.highlight_operation_file)
 
     def get_highlight_results(self):
         results, seen = [], set()
@@ -1411,7 +1696,16 @@ class WebApi:
                                 'detected_candidate_count': len((manifest.get('analysis') or {}).get('candidates') or []),
                                 'approved_candidate_count': len(manifest.get('selected_candidates') or []),
                                 'clips': manifest.get('clips') or [], 'outputs': manifest.get('outputs') or [],
-                                'versions': manifest.get('versions') or []})
+                                'versions': manifest.get('versions') or [],
+                                'initial_mix': manifest.get('initial_mix') or {},
+                                'source_segments': [{
+                                    'index': index, 'offset': float(segment.get('offset') or 0),
+                                    'duration': float(segment.get('duration') or 0),
+                                } for index, segment in enumerate(manifest.get('source_segments') or [])],
+                                'timeline_duration': max((
+                                    float(segment.get('offset') or 0) + float(segment.get('duration') or 0)
+                                    for segment in manifest.get('source_segments') or []
+                                ), default=0)})
         results.sort(key=lambda item: item.get('created_at') or '', reverse=True)
         return results
 
@@ -1703,7 +1997,7 @@ class WebApi:
                           for item in (manifest.get('analysis') or {}).get('candidates') or []}
             source_sets = []
             for clip_id, clip in clips.items():
-                source_sets.append((clip.get('path'), [clip_id]))
+                source_sets.append((clip.get('path') or clip.get('export_path'), [clip_id]))
             initial_ids = [str(value) for value in (manifest.get('initial_mix') or {}).get('clip_ids') or []]
             for output in manifest.get('outputs') or []:
                 source_sets.append((output.get('path'), initial_ids))
@@ -1716,13 +2010,22 @@ class WebApi:
                 for clip_id in clip_ids:
                     clip, candidate = clips.get(clip_id, {}), candidates.get(clip_id, {})
                     representative = candidate.get('representative') or candidate.get('representative_texts') or []
-                    candidate_start = float(candidate.get('start', clip.get('requested_start')) or 0)
-                    candidate_end = float(candidate.get('end', clip.get('requested_end')) or candidate_start)
-                    nearby_subtitles = candidate.get('subtitle_excerpt') or [
-                        line for line in subtitles
-                        if float(line.get('end', 0)) > candidate_start - 6
-                        and float(line.get('start', 0)) < candidate_end + 6
-                    ][:20]
+                    kept_ranges = clip.get('ranges') or [{
+                        'start': float(clip.get('requested_start') or candidate.get('start') or 0),
+                        'end': float(clip.get('requested_end') or candidate.get('end') or 0),
+                    }]
+                    candidate_start = float(kept_ranges[0]['start'])
+                    candidate_end = float(kept_ranges[-1]['end'])
+                    representative = [item for item in representative if not isinstance(item, dict) or any(
+                        float(value['start']) <= float(item.get('time', value['start'])) <= float(value['end'])
+                        for value in kept_ranges
+                    )]
+                    subtitle_pool = candidate.get('subtitle_excerpt') or subtitles
+                    nearby_subtitles = [line for line in subtitle_pool if any(
+                        float(line.get('end', 0)) > float(value['start']) - 6
+                        and float(line.get('start', 0)) < float(value['end']) + 6
+                        for value in kept_ranges
+                    )][:20]
                     contexts.append({
                         'priority': 0 if reference_path and real_media == os.path.realpath(reference_path) else 1,
                         'order': selected[real_media], 'id': clip_id,
@@ -1920,9 +2223,19 @@ class WebApi:
                     add(output.get('path'), 'highlight_mix', taskname, group, '热点混剪成片',
                         output.get('duration'), result.get('created_at'))
                 for clip in result.get('clips') or []:
-                    add(clip.get('path'), 'highlight_clip', taskname, group,
-                        clip.get('title') or f'热点小片段 {clip.get("sequence") or clip.get("id")}',
-                        clip.get('duration'), result.get('created_at'))
+                    title = clip.get('title') or f'热点小片段 {clip.get("sequence") or clip.get("id")}'
+                    if clip.get('storage') == 'virtual':
+                        token = self._encode_virtual_material(result.get('manifest'), clip)
+                        timestamp = os.path.getmtime(result.get('manifest'))
+                        items.append({'path': token, 'kind': 'highlight_clip', 'taskname': taskname,
+                                      'group': group, 'title': title, 'part_title': str(title)[:80],
+                                      'duration': max(0, float(clip.get('duration') or 0)), 'size': 0,
+                                      'modified_at': datetime.fromtimestamp(timestamp).isoformat(),
+                                      'modified_ts': timestamp, 'created_at': result.get('created_at'),
+                                      'virtual': True})
+                    else:
+                        add(clip.get('path'), 'highlight_clip', taskname, group, title,
+                            clip.get('duration'), result.get('created_at'))
                 for version in result.get('versions') or []:
                     add(version.get('path'), 'highlight_version', taskname, group,
                         f'自定义混剪 {version.get("name") or version.get("id")}',

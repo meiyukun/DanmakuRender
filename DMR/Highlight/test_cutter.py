@@ -6,10 +6,72 @@ from unittest.mock import Mock, patch
 
 from DMR.Highlight import Highlight, attach_subtitle_excerpts, filter_clip_candidates
 from DMR.Highlight.analyzer import select_profile
-from DMR.Highlight.cutter import keyframe_extension_seconds, map_range, render_highlight
+from DMR.Highlight.cutter import keyframe_extension_seconds, map_range, map_ranges, materialize_clip, normalize_ranges, render_highlight
 
 
 class HighlightCutterTests(unittest.TestCase):
+    def test_multiple_ranges_are_sorted_merged_and_mapped_with_range_indexes(self):
+        ranges = normalize_ranges([
+            {'start': 12, 'end': 14}, {'start': 2, 'end': 5}, {'start': 5, 'end': 7},
+        ])
+        self.assertEqual([{'start': 2.0, 'end': 7.0}, {'start': 12.0, 'end': 14.0}], ranges)
+        pieces = map_ranges([
+            {'path': 'one.mp4', 'offset': 0, 'duration': 10},
+            {'path': 'two.mp4', 'offset': 10, 'duration': 10},
+        ], ranges)
+        self.assertEqual([0, 1], [item['range_index'] for item in pieces])
+        self.assertEqual([(2, 7), (2, 4)], [(item['start'], item['end']) for item in pieces])
+
+    def test_multiple_ranges_reject_short_retained_section(self):
+        with self.assertRaisesRegex(ValueError, '不得短于'):
+            normalize_ranges([{'start': 1, 'end': 1.5}, {'start': 3, 'end': 5}])
+
+    def test_multiple_ranges_reject_more_than_fifty_sections(self):
+        with self.assertRaisesRegex(ValueError, '最多保留 50'):
+            normalize_ranges([{'start': index * 2, 'end': index * 2 + 1}
+                              for index in range(51)])
+
+    def test_multiple_ranges_reject_non_finite_boundaries(self):
+        for value in (float('nan'), float('inf')):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, '起止时间无效'):
+                normalize_ranges([{'start': 1, 'end': value}])
+
+    @patch('DMR.Highlight.cutter._concat')
+    @patch('DMR.Highlight.cutter._run')
+    def test_materialize_clip_keeps_flattened_piece_order(self, run, concat):
+        clip = {'id': 'jump-cut', 'pieces': [
+            {'path': 'one.mp4', 'start': 2, 'end': 4, 'range_index': 0},
+            {'path': 'two.mp4', 'start': 1, 'end': 3, 'range_index': 0},
+            {'path': 'two.mp4', 'start': 8, 'end': 11, 'range_index': 1},
+        ]}
+        os.makedirs('.temp', exist_ok=True)
+        with tempfile.TemporaryDirectory() as output_dir:
+            output = os.path.join(output_dir, 'result.mp4')
+            materialize_clip(clip, output, {'mode': 'copy'}, Mock(),
+                             SimpleNamespace(resolution=(1920, 1080)))
+        self.assertEqual(['one.mp4', 'two.mp4', 'two.mp4'],
+                         [call.args[0][call.args[0].index('-i') + 1] for call in run.call_args_list])
+        self.assertEqual(1, concat.call_count)
+
+    def test_virtual_clips_store_cross_segment_ranges_without_files(self):
+        segments = [
+            {'path': 'one.mp4', 'offset': 0, 'duration': 10},
+            {'path': 'two.mp4', 'offset': 10, 'duration': 10},
+        ]
+        with tempfile.TemporaryDirectory() as output_dir:
+            outputs, records, _ = render_highlight(
+                segments, [{'id': 'cross', 'start': 8, 'end': 13, 'category': 'funny'}], [],
+                output_dir, SimpleNamespace(path='one.mp4', resolution=(1920, 1080)),
+                {'format': 'mp4'}, {'id': 'all', 'name': 'all'}, Mock(),
+                virtual=True, generate_mix=False,
+            )
+            self.assertFalse(os.path.isdir(os.path.join(output_dir, 'clips')))
+        self.assertFalse(outputs)
+        self.assertEqual('virtual', records[0]['storage'])
+        self.assertNotIn('path', records[0])
+        self.assertEqual([(8, 10), (0, 3)],
+                         [(piece['start'], piece['end']) for piece in records[0]['pieces']])
+
     def test_candidate_subtitle_excerpt_includes_nearby_spoken_lines(self):
         candidates = [{'id': 'hot', 'start': 100, 'end': 110}]
         subtitles = [

@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -97,6 +98,41 @@ def map_range(segments, start, end, outward=False):
     return mapped
 
 
+def normalize_ranges(ranges, minimum_duration=1.0, max_ranges=50):
+    """Validate, sort and merge global timeline ranges."""
+    parsed = []
+    for value in ranges or []:
+        if not isinstance(value, dict):
+            raise ValueError("热点保留区间格式无效")
+        start, end = float(value.get("start")), float(value.get("end"))
+        if not (math.isfinite(start) and math.isfinite(end) and start >= 0 and end > start):
+            raise ValueError("热点保留区间起止时间无效")
+        parsed.append({"start": start, "end": end})
+    normalized = []
+    for value in sorted(parsed, key=lambda item: (item["start"], item["end"])):
+        start, end = value["start"], value["end"]
+        if normalized and start <= normalized[-1]["end"] + 1e-6:
+            normalized[-1]["end"] = max(normalized[-1]["end"], end)
+        else:
+            normalized.append({"start": start, "end": end})
+    if not normalized:
+        raise ValueError("热点素材至少需要一个保留区间")
+    if any(value["end"] - value["start"] < float(minimum_duration) - 1e-6
+           for value in normalized):
+        raise ValueError(f"每个热点保留区间不得短于 {minimum_duration:g} 秒")
+    if len(normalized) > int(max_ranges):
+        raise ValueError(f"热点素材最多保留 {int(max_ranges)} 个区间")
+    return normalized
+
+
+def map_ranges(segments, ranges, outward=False):
+    pieces = []
+    for range_index, value in enumerate(ranges):
+        for piece in map_range(segments, value["start"], value["end"], outward=outward):
+            pieces.append({**piece, "range_index": range_index})
+    return pieces
+
+
 def keyframe_extension_seconds(pieces, requested_start, requested_end):
     """Return total duration added before and after a requested clip."""
     if not pieces:
@@ -158,8 +194,64 @@ def _encode_piece(piece, output, ffmpeg, config, base_info, logger):
     _run(command + [output], logger)
 
 
-def render_highlight(segments, candidates, selected, output_dir, base_info, config, mix, logger):
-    """Persist one physical file per hotspot event, then create one initial mix.
+def _clip_record(candidate, clip_id, index, pieces, selected_ids, storage, encoding_mode=None):
+    start, end = float(candidate["start"]), float(candidate["end"])
+    ranges = [{"start": start, "end": end}]
+    return {
+        "id": clip_id, "sequence": index, "storage": storage,
+        "category": candidate.get("category"), "score": candidate.get("score", 0),
+        "title": candidate.get("ai_title", ""), "ai_reviewed": candidate.get("ai_reviewed", False),
+        "ai_keep": candidate.get("ai_keep", True), "ai_status": candidate.get("ai_status", "disabled"),
+        "ai_confidence": candidate.get("ai_confidence"), "ai_category": candidate.get("ai_category"),
+        "ai_reason": candidate.get("ai_reason", ""), "auto_selected": clip_id in selected_ids,
+        "original_start": start, "original_end": end, "requested_start": start, "requested_end": end,
+        "original_ranges": ranges, "ranges": ranges,
+        "effective_start": start, "effective_end": end, "duration": end - start,
+        "revision": 1, "pieces": [{**piece, "range_index": piece.get("range_index", 0)} for piece in pieces],
+        **({"encoding_mode": encoding_mode} if encoding_mode else {}),
+    }
+
+
+def materialize_clip(clip, output, config, logger, base_info=None):
+    """Create a physical snapshot of a virtual clip at its current revision."""
+    pieces = clip.get("pieces") or []
+    if not pieces:
+        raise ValueError(f"虚拟热点片段没有可用源分段: {clip.get('id')}")
+    ffmpeg = config.get("ffmpeg") or ToolsList.get("ffmpeg") or "ffmpeg"
+    extension = os.path.splitext(output)[1] or ".mp4"
+    if base_info is None:
+        streams = _probe(pieces[0]["path"]).get("streams") or []
+        video = next((item for item in streams if item.get("codec_type") == "video"), {})
+        base_info = SimpleNamespace(resolution=(video.get("width") or 1920, video.get("height") or 1080))
+    with tempfile.TemporaryDirectory(prefix="dmr-highlight-material-", dir=".temp") as temp_dir:
+        paths = []
+        for index, piece in enumerate(pieces):
+            target = output if len(pieces) == 1 else os.path.join(temp_dir, f"{index:03d}{extension}")
+            copied = False
+            if str(config.get("mode", "copy")).lower() == "copy":
+                try:
+                    _run([ffmpeg, "-y", "-ss", str(piece["start"]),
+                          "-t", str(piece["end"] - piece["start"]), "-i", piece["path"],
+                          "-map", "0:v:0", "-map", "0:a?", "-c", "copy", target], logger)
+                    copied = True
+                except Exception:
+                    try:
+                        os.remove(target)
+                    except OSError:
+                        pass
+                    if config.get("copy_fallback", "reencode") != "reencode":
+                        raise
+            if not copied:
+                _encode_piece(piece, target, ffmpeg, config, base_info, logger)
+            paths.append(target)
+        if len(paths) > 1:
+            _concat(paths, output, ffmpeg, logger)
+    return output
+
+
+def render_highlight(segments, candidates, selected, output_dir, base_info, config, mix, logger,
+                     virtual=False, generate_mix=True):
+    """Build physical clips or virtual range records, and optionally create the initial mix.
 
     Candidate categories are metadata only. This function intentionally never
     concatenates candidates by category before writing the clip library.
@@ -167,7 +259,8 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
     ffmpeg = config.get("ffmpeg") or ToolsList.get("ffmpeg") or "ffmpeg"
     format_name = config.get("format", "mp4")
     clip_dir = os.path.join(output_dir, "clips")
-    os.makedirs(clip_dir, exist_ok=True)
+    if not virtual:
+        os.makedirs(clip_dir, exist_ok=True)
     requested_mode = str(config.get("mode", "copy")).lower()
     copy_fallback = config.get("copy_fallback", "reencode") == "reencode"
     align_outward = config.get("keyframe_alignment", "outward") == "outward"
@@ -198,6 +291,11 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
     for index, candidate in enumerate(sorted(candidates, key=lambda item: item["start"]), 1):
         clip_id = str(candidate.get("id") or f"clip-{index:03d}")
         exact_pieces = map_range(segments, candidate["start"], candidate["end"], outward=False)
+        if virtual:
+            if exact_pieces:
+                clip_records.append(_clip_record(candidate, clip_id, index, exact_pieces,
+                                                 selected_ids, "virtual"))
+            continue
         pieces = exact_pieces
         clip_mode = "reencode"
         fallback_reason = None
@@ -232,25 +330,25 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
             encode_candidate(pieces, filename, clip_mode)
         effective_start = pieces[0]["offset"] + pieces[0]["start"]
         effective_end = pieces[-1]["offset"] + pieces[-1]["end"]
-        record = {"id": clip_id, "sequence": index, "path": filename,
-                  "category": candidate.get("category"),
-                  "score": candidate.get("score", 0), "title": candidate.get("ai_title", ""),
-                  "ai_reviewed": candidate.get("ai_reviewed", False),
-                  "ai_keep": candidate.get("ai_keep", True),
-                  "ai_status": candidate.get("ai_status", "disabled"),
-                  "ai_confidence": candidate.get("ai_confidence"),
-                  "ai_category": candidate.get("ai_category"),
-                  "ai_reason": candidate.get("ai_reason", ""),
-                  "auto_selected": clip_id in selected_ids,
-                  "requested_start": candidate["start"], "requested_end": candidate["end"],
-                  "effective_start": effective_start, "effective_end": effective_end,
-                  "duration": effective_end - effective_start, "encoding_mode": clip_mode}
+        record = _clip_record(candidate, clip_id, index, pieces, selected_ids, "physical", clip_mode)
+        record.update({"path": filename, "effective_start": effective_start,
+                       "effective_end": effective_end, "duration": effective_end - effective_start})
         clip_records.append(record)
         clip_paths[clip_id] = filename
         used_modes.append(clip_mode)
     ordered_paths = [clip_paths[str(item.get("id"))] for item in selected if str(item.get("id")) in clip_paths]
+    temporary = None
+    if virtual and generate_mix and selected:
+        temporary = tempfile.TemporaryDirectory(prefix="dmr-highlight-initial-", dir=".temp")
+        records = {item["id"]: item for item in clip_records}
+        for index, item in enumerate(selected):
+            clip = records.get(str(item.get("id")))
+            if clip:
+                path = os.path.join(temporary.name, f"{index:03d}.{format_name}")
+                materialize_clip(clip, path, config, logger, base_info)
+                ordered_paths.append(path)
     outputs = []
-    if ordered_paths:
+    if ordered_paths and generate_mix:
         name = mix.get("output_name")
         if name:
             context = base_info.copy(); context["highlight"] = {"id": mix["id"], "name": mix["name"]}
@@ -269,6 +367,8 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
         video.highlight_profile, video.highlight_name = mix["id"], mix["name"]
         video.highlight_categories = mix.get("categories", ["*"])
         outputs.append(video)
+    if temporary:
+        temporary.cleanup()
     effective_mode = (used_modes[0] if used_modes and len(set(used_modes)) == 1
                       else "mixed" if used_modes else requested_mode)
     return outputs, clip_records, effective_mode

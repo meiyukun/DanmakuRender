@@ -122,6 +122,9 @@ class HighlightTask:
             return False, '热点场次记录不存在。'
         if job.get('status') not in ('completed', 'failed'):
             return False, f'热点场次仍处于 {job.get("status")} 状态，不能删除。'
+        if getattr(self, 'send_queue', None) is not None:
+            self._release(job.get('source_task'), job.get('group_id'),
+                          retain_id=os.path.realpath(manifest_path), release_retained=True)
         self.jobs.pop(job_id, None)
         self.recovered_job_ids.discard(job_id)
         self._save()
@@ -134,6 +137,7 @@ class HighlightTask:
         encoding = target.get('encoding') or {}
         result = deepcopy(encoding)
         result.update({
+            'source': {'video': source.get('video', 'src_video')},
             'danmaku_source': source.get('danmaku', 'auto'),
             'danmaku_types': source.get('danmaku_types', ['danmaku', 'emoticon']),
             'detection': deepcopy(analysis.get('detection') or {}),
@@ -141,6 +145,7 @@ class HighlightTask:
             'categories': deepcopy(analysis.get('categories') or {}),
             'test_fallback_clip_seconds': analysis.get('test_fallback_clip_seconds', 0),
             'outputs': deepcopy(target.get('outputs') or []),
+            'upload': {'enabled': bool((target.get('upload') or {}).get('enabled'))},
         })
         return result
 
@@ -362,10 +367,11 @@ class HighlightTask:
             self._dispatch_if_ready(job_id, job)
             return
 
-    def _release(self, source_task, group_id):
+    def _release(self, source_task, group_id, retain_id=None, release_retained=False):
         self.send_queue.put(PipeMessage(
             source=f'highlight/{self.taskname}', target=f'replay/{source_task}', event='highlight/release',
-            data={'highlight_task': self.taskname, 'group_id': group_id},
+            data={'highlight_task': self.taskname, 'group_id': group_id,
+                  'retain_id': retain_id, 'release_retained': release_retained},
         ))
 
     def _fail(self, job_id, source_task, group_id, reason):
@@ -384,8 +390,9 @@ class HighlightTask:
             job.update({'status': 'output_ready', 'manifest': result.get('manifest'),
                         'outputs': result.get('outputs') or [], 'finished_at': time.time()})
             self._save()
-            # Source files are no longer needed once outputs and manifest are durable.
-            self._release(job['source_task'], job['group_id'])
+            virtual = str(((job.get('config') or {}).get('source') or {}).get('video')) == 'dm_video'
+            self._release(job['source_task'], job['group_id'],
+                          retain_id=os.path.realpath(job.get('manifest') or '') if virtual else None)
             self._start_uploads(job_id, job)
             self._worker_recv.put(PipeMessage(source=f'highlight/{self.taskname}', target='highlight',
                                               event='ack', request_id=message.request_id))

@@ -104,6 +104,32 @@
     <div class="modal-actions"><button type="button" class="btn-ghost" id="confirm-cancel">取消</button><button type="button" class="btn-danger" id="confirm-delete">永久删除</button></div>
   </div>
 </div>
+<div id="trim-modal" class="modal-backdrop" hidden>
+  <div class="trim-modal" role="dialog" aria-modal="true" aria-labelledby="trim-title">
+    <div class="trim-heading"><div><span class="eyebrow">PRECISION TRIM</span><h3 id="trim-title">调整热点范围</h3></div><button type="button" class="btn-ghost" id="trim-close">关闭</button></div>
+    <video id="trim-video" controls preload="metadata"></video>
+    <div class="trim-readout"><strong id="trim-range-text"></strong><span id="trim-duration-text"></span><span id="trim-playhead-text">当前位置 --:--</span><span id="trim-piece-hint"></span></div>
+    <div class="trim-review-toolbar">
+      <label>倍速<select id="trim-rate"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="3">3×</option></select></label>
+      <button type="button" class="btn-ghost" id="trim-back-5">后退 5 秒</button><button type="button" class="btn-ghost" id="trim-forward-5">前进 5 秒</button>
+      <button type="button" class="btn-ghost" id="trim-preview-start">预览起点</button><button type="button" class="btn-ghost" id="trim-preview-end">预览终点前 5 秒</button>
+      <span class="trim-shortcuts">快捷键：J/L ±5 秒 · I/O 设边界 · B/E 预览边界 · [/] 标记排除 · X 确认</span>
+    </div>
+    <div class="trim-window-toolbar"><span id="trim-window-text"></span><div><button type="button" class="btn-ghost" id="trim-focus">聚焦当前</button><button type="button" class="btn-ghost" id="trim-expand">扩大范围</button><button type="button" class="btn-ghost" id="trim-full">整场范围</button></div></div>
+    <div class="trim-track"><label>起点<input id="trim-start" type="range" step="0.1"></label><input id="trim-start-time" class="trim-time-input" aria-label="起点时间" spellcheck="false"><label>终点<input id="trim-end" type="range" step="0.1"></label><input id="trim-end-time" class="trim-time-input" aria-label="终点时间" spellcheck="false"></div>
+    <div class="trim-controls">
+      <div><button type="button" data-trim="start:-5">起点 -5s</button><button type="button" data-trim="start:-1">-1s</button><button type="button" data-trim="start:1">+1s</button><button type="button" data-trim="start:5">+5s</button><button type="button" id="trim-set-start">当前画面设为起点</button></div>
+      <div><button type="button" data-trim="end:-5">终点 -5s</button><button type="button" data-trim="end:-1">-1s</button><button type="button" data-trim="end:1">+1s</button><button type="button" data-trim="end:5">+5s</button><button type="button" id="trim-set-end">当前画面设为终点</button></div>
+    </div>
+    <section class="trim-exclusion-panel">
+      <div class="trim-exclusion-heading"><div><strong>排除中间无聊部分</strong><small id="trim-exclusion-status">尚未标记待排除区间</small></div><span id="trim-kept-summary"></span></div>
+      <div class="trim-exclusion-actions"><button type="button" class="btn-ghost" id="trim-mark-cut-start">标记排除起点 [</button><button type="button" class="btn-ghost" id="trim-mark-cut-end">标记排除终点 ]</button><button type="button" class="btn-ghost" id="trim-preview-cut" disabled>预览待排除部分</button><button type="button" id="trim-apply-cut" disabled>确认排除 X</button><button type="button" class="btn-ghost" id="trim-undo-cut">撤销上次排除</button><button type="button" class="btn-ghost" id="trim-clear-cuts">清除全部排除</button></div>
+      <div id="trim-range-timeline" class="trim-range-timeline" aria-label="保留与排除区间时间轴"></div>
+      <div id="trim-exclusion-list" class="trim-exclusion-list"></div>
+    </section>
+    <div class="modal-actions"><span id="trim-dirty-status" class="inline-status"></span><button type="button" class="btn-ghost" id="trim-reset-saved">恢复已保存范围</button><button type="button" class="btn-ghost" id="trim-reset">恢复算法范围</button><button type="button" class="btn-ghost" id="trim-play">播放完整选区</button><label class="switch-row"><input type="checkbox" id="trim-loop">循环预览</label><button type="button" id="trim-save">保存范围</button></div>
+  </div>
+</div>
 <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 <script id="initial-sessions" type="application/json">{{ sessions|tojson }}</script>
 <script id="initial-tasknames" type="application/json">{{ tasknames|tojson }}</script>

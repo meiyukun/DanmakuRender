@@ -384,10 +384,13 @@ class Highlight:
             task["status"] = "rendering"
             with self._lock:
                 self._save()
+            virtual_clips = str((config.get("source") or {}).get("video", "src_video")) == "dm_video"
+            generate_initial_mix = bool((config.get("upload") or {}).get("enabled")) or not virtual_clips
             if clip_candidates:
                 outputs, clip_records, encoding_mode = render_highlight(
                     segments, clip_candidates, selected, output_dir, base_info, config,
-                    combined_profile, self.logger,
+                    combined_profile, self.logger, virtual=virtual_clips,
+                    generate_mix=generate_initial_mix,
                 )
             else:
                 outputs, clip_records, encoding_mode = [], [], config.get("mode", "copy")
@@ -397,7 +400,7 @@ class Highlight:
             streamer_name = (streamer.get("name") if isinstance(streamer, dict)
                              else getattr(streamer, "name", None))
             manifest = {
-                "version": 2, "taskname": task.get("taskname"), "source_task": task.get("source_task"),
+                "version": 3, "taskname": task.get("taskname"), "source_task": task.get("source_task"),
                 "group_id": task.get("group_id"),
                 "streamer_name": str(streamer_name or task.get("source_task") or ""),
                 "subtitle_status": task.get("subtitle_status"), "analysis": analysis,
@@ -413,7 +416,9 @@ class Highlight:
                 "auto_selected_candidates": [str(item.get("id")) for item in selected],
                 "requested_outputs": [item["id"] for item in requested_profiles],
                 "initial_mix": {"id": combined_profile["id"],
-                                "clip_ids": [str(item.get("id")) for item in selected]},
+                                "clip_ids": [str(item.get("id")) for item in selected],
+                                "status": "generated" if outputs else "pending",
+                                "stale": False, "revision": 1},
                 "encoding_mode": encoding_mode,
                 "clips": clip_records,
                 "versions": [],
