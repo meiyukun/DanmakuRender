@@ -14,6 +14,26 @@ from DMR.utils import PipeMessage, VideoInfo
 
 
 class HighlightTaskTests(unittest.TestCase):
+    def test_automatic_and_manual_runs_both_use_session_directories(self):
+        task = HighlightTask.__new__(HighlightTask)
+        task.taskname = 'Highlight'
+        task._worker_recv = queue.Queue()
+        task._save = Mock()
+        base = {'source_task': 'Test', 'group_id': 'group', 'status': 'preparing',
+                'request_id': 'request', 'segments': [{'segment_id': 1, 'video': VideoInfo(
+                    path=os.path.join('live', 'source.mp4'), ctime=datetime.now(), duration=60)}],
+                'source_segment_count': 1, 'ignored_segments': [], 'dependencies': {},
+                'config': {'source': {'subtitle': 'available'}, 'encoding': {'output_dir': 'outputs'},
+                           'analysis': {}, 'outputs': []}}
+        automatic = dict(base, manual=False, run_id=None)
+        task._dispatch_if_ready('auto', automatic)
+        auto_message = task._worker_recv.get_nowait()
+        self.assertTrue(auto_message.data['args']['output_dir'].endswith(os.path.join('group-automatic')))
+        manual = dict(base, manual=True, run_id='run')
+        task._dispatch_if_ready('manual', manual)
+        manual_message = task._worker_recv.get_nowait()
+        self.assertTrue(manual_message.data['args']['output_dir'].endswith(os.path.join('group-manual-run')))
+
     def test_completed_highlight_result_can_be_removed_by_manifest(self):
         task = HighlightTask.__new__(HighlightTask)
         task.jobs = {'job': {'status': 'completed', 'manifest': os.path.abspath('result.highlights.json')}}

@@ -69,6 +69,31 @@ Base URL: `https://member.bilibili.com/x2/creative/web`
 }
 ```
 
+### 获取账号下的合集列表
+
+`GET /seasons`
+
+| 参数 | 位置 | 类型 | 说明 |
+|------|------|------|------|
+| pn | query | int | 页码，从1开始 |
+| ps | query | int | 每页数量 |
+
+响应中的 `data.seasons` 为合集列表；每项的 `season.id` 和 `season.title` 分别为合集ID和标题。
+
+### 获取账号最近投稿
+
+Base URL：`https://member.bilibili.com/x/web`
+
+`GET /archives`
+
+| 参数 | 位置 | 类型 | 说明 |
+|------|------|------|------|
+| status | query | string | `pubed` 表示已发布稿件 |
+| pn | query | int | 页码，从1开始 |
+| ps | query | int | 每页数量 |
+
+响应中的 `data.arc_audits` 为投稿列表，稿件标题、BV号和发布时间位于每项的 `Archive` 对象。
+
 ---
 
 ## 2. 编辑合集

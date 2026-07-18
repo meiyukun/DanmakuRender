@@ -8,6 +8,25 @@ executable_tools_path:
   ffprobe: ~
   biliup: ~
 
+# AI接口统一配置。推荐在项目根目录 .env 中设置 DMR_AI_BASE_URL 和
+# DMR_AI_API_KEY；系统环境变量和 .env 优先于下方明文值。
+ai:
+  base_url: ''
+  api_key: ''
+  timeout: 120
+  capabilities:
+    cover_analysis:
+      model: gpt-5.4
+      max_tokens: 1200
+    highlight_review:
+      model: gpt-5.4
+      max_tokens: 1800
+    image_generation:
+      model: gpt-5.5
+      stream: False
+      retries: 3
+      fallback_non_stream: True
+
 # DMR引擎参数
 dmr_engine_args:
   # 重启时不恢复未完成流水线；单个 DMR-*.yml 可通过
@@ -572,13 +591,6 @@ upload_args:
       # AI封面生成。任一步骤失败时会回退到本地封面。
       ai:
         enabled: False
-        base_url: ''
-        api_key_env: DMR_IMAGE_API_KEY
-        api_key: ''
-        # /v1/responses 的model字段；中转的image_generation工具会把生图后端固定为gpt-image-2。
-        response_model: gpt-5.5
-        # 文本AI分析弹幕并生成完整生图提示词的模型。
-        analysis_model: gpt-5.5
         # 是否读取弹幕文件并让文本AI生成更贴近本次视频内容的完整生图提示词。
         analyze_danmaku: True
         peak_offset_seconds: 5
@@ -613,10 +625,6 @@ upload_args:
           只返回最终生图提示词正文，不要返回JSON，不要返回Markdown，不要解释分析过程。
         # 请求AI生图的分辨率。建议使用官方支持尺寸，例如 1536x1024、2048x1152、1024x1024。
         size: 1536x1024
-        # AI接口超时时间（秒），包括生图请求。
-        timeout: 500
-        # 生图请求失败重试次数，用于处理 unexpected EOF 等上游临时错误。
-        image_retries: 3
         # 本地兜底生图提示词模板。文本AI成功时不会使用；文本AI失败、未启用弹幕AI分析或无有效弹幕时使用。
         prompt: |
           为B站视频生成一张高点击率完整封面。

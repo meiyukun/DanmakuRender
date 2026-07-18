@@ -4,10 +4,8 @@ import logging
 import os
 import re
 import subprocess
-import time
 from io import BytesIO
 
-import requests
 from PIL import Image
 
 from DMR.Uploader.cover.danmaku_analyzer import analyze_danmaku_files, compact_analysis_for_ai
@@ -42,26 +40,6 @@ DEFAULT_ANALYSIS_PROMPT = """视频标题：{TITLE}
 
 请直接输出一段完整的AI生图提示词，用于生成B站视频封面。
 要求：贴近本次视频内容和弹幕热点；如果随生图请求附带直播截图，请明确让生图模型参考截图的画面内容、构图、色调和游戏场景氛围，但不要直接复刻截图；包含画面主体、场景氛围、构图、中文封面标题排版建议；避免真实平台Logo、二维码、真人脸；只返回提示词正文。"""
-
-
-def _get_api_key(ai_config):
-    env_name = ai_config.get("api_key_env") or "DMR_IMAGE_API_KEY"
-    key = os.getenv(env_name) if env_name else None
-    return key or ai_config.get("api_key") or ""
-
-
-def _api_url(ai_config, path):
-    base_url = (ai_config.get("base_url") or "").rstrip("/")
-    if not base_url:
-        raise RuntimeError("AI封面已开启，但未配置 cover_auto.ai.base_url")
-    return f"{base_url}{path}"
-
-
-def _headers(api_key):
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
 
 
 def _extract_json_object(text):
@@ -157,7 +135,7 @@ def _build_prompt_context(video_info, danmaku_analysis=None):
     return context
 
 
-def analyze_danmaku_with_ai(ai_config, video_info, danmaku_analysis, api_key):
+def analyze_danmaku_with_ai(ai_config, video_info, danmaku_analysis, ai_client):
     if not danmaku_analysis or danmaku_analysis.get("total", 0) <= 0:
         return {}
     if ai_config.get("analysis_mode", "local_then_ai") not in ("local_then_ai", "ai", "force_ai"):
@@ -186,31 +164,10 @@ def analyze_danmaku_with_ai(ai_config, video_info, danmaku_analysis, api_key):
         prompt_context,
     )
 
-    timeout = int(ai_config.get("analysis_timeout", ai_config.get("timeout", 120)) or 120)
-    payload = {
-        "model": ai_config.get("analysis_model") or "gpt-5.4",
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
-        "max_tokens": int(ai_config.get("analysis_max_tokens", 600) or 600),
-    }
-
-    response = requests.post(
-        _api_url(ai_config, "/v1/chat/completions"),
-        headers=_headers(api_key),
-        json=payload,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    data = response.json()
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    content = ai_client.chat('cover_analysis', [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ])
     return _clean_text_ai_prompt(content)
 
 
@@ -375,55 +332,6 @@ def _extract_reference_frame(ai_config, video_info, danmaku_analysis):
         return None
 
 
-def _image_data_url(image_path):
-    with open(image_path, "rb") as f:
-        data = base64.b64encode(f.read()).decode("ascii")
-    ext = os.path.splitext(image_path)[1].lower()
-    mime = "image/png" if ext == ".png" else "image/jpeg"
-    return f"data:{mime};base64,{data}"
-
-
-def _redact_image_response(data):
-    if not isinstance(data, dict):
-        return str(type(data).__name__)
-    redacted = {}
-    for key, value in data.items():
-        if key == "data" and isinstance(value, list):
-            items = []
-            for item in value[:1]:
-                if isinstance(item, dict):
-                    items.append({
-                        item_key: f"<str len={len(item_value)}>" if isinstance(item_value, str) else type(item_value).__name__
-                        for item_key, item_value in item.items()
-                    })
-                else:
-                    items.append(type(item).__name__)
-            redacted[key] = items
-        else:
-            redacted[key] = value
-    return redacted
-
-
-def _find_image_base64(data):
-    if isinstance(data, dict):
-        if data.get("error"):
-            raise RuntimeError(f"AI生图接口返回错误: {data.get('error')}")
-        for key in ("result", "b64_json", "image_base64", "base64", "data"):
-            value = data.get(key)
-            if isinstance(value, str) and len(value) > 100:
-                return value
-        for value in data.values():
-            found = _find_image_base64(value)
-            if found:
-                return found
-    elif isinstance(data, list):
-        for item in data:
-            found = _find_image_base64(item)
-            if found:
-                return found
-    return None
-
-
 def _save_image_from_b64(b64_json, output_path):
     if "," in b64_json and b64_json.lstrip().startswith("data:"):
         b64_json = b64_json.split(",", 1)[1]
@@ -434,137 +342,14 @@ def _save_image_from_b64(b64_json, output_path):
     return output_path
 
 
-def _image_tool(ai_config, size):
-    tool = {
-        "type": "image_generation",
-        "size": size,
-        "output_format": "png",
-        "background": "opaque",
-        "moderation": "auto",
-        "partial_images": 0,
-    }
-    for key in ("output_format", "output_compression", "background", "moderation", "partial_images"):
-        value = ai_config.get(key)
-        if value is not None:
-            tool[key] = value
-    return tool
-
-
-def _responses_image_payload(ai_config, prompt, size, reference_image=None):
-    content = prompt
-    if reference_image:
-        content = [
-            {
-                "type": "input_text",
-                "text": prompt,
-            },
-            {
-                "type": "input_image",
-                "image_url": _image_data_url(reference_image),
-            },
-        ]
-    return {
-        "model": ai_config.get("response_model") or ai_config.get("model") or "gpt-5.5",
-        "stream": bool(ai_config.get("stream", False)),
-        "input": [{
-            "role": "user",
-            "content": content,
-        }],
-        "tools": [_image_tool(ai_config, size)],
-    }
-
-
-def _parse_sse_json(line):
-    if not line:
-        return None
-    if isinstance(line, bytes):
-        line = line.decode("utf-8", errors="ignore")
-    line = line.strip()
-    if not line or line.startswith(":"):
-        return None
-    if line.startswith("data:"):
-        line = line[5:].strip()
-    if not line or line == "[DONE]":
-        return None
-    try:
-        return json.loads(line)
-    except json.JSONDecodeError:
-        return None
-
-
-def _request_image_generation(ai_config, api_key, payload, timeout):
-    retries = int(ai_config.get("image_retries", 3) or 3)
-    retries = max(1, retries)
-    payloads = [payload]
-    if payload.get("stream", False) and ai_config.get("fallback_non_stream", True):
-        non_stream_payload = payload.copy()
-        non_stream_payload["stream"] = False
-        payloads.append(non_stream_payload)
-
-    last_error = None
-    for payload_idx, request_payload in enumerate(payloads):
-        if payload_idx > 0:
-            logger.warning("流式AI生图失败，将使用非流式Responses请求重试当前尺寸。")
-        for attempt in range(1, retries + 1):
-            stream = bool(request_payload.get("stream", True))
-            try:
-                response = requests.post(
-                    _api_url(ai_config, "/v1/responses"),
-                    headers=_headers(api_key),
-                    json=request_payload,
-                    timeout=timeout,
-                    stream=stream,
-                )
-                try:
-                    response.raise_for_status()
-                except requests.HTTPError as e:
-                    body = ""
-                    try:
-                        body = response.text[:1000]
-                    except Exception:
-                        body = "<无法读取响应体>"
-                    raise RuntimeError(f"{e}; response_body={body}") from e
-                if stream:
-                    data = None
-                    for line in response.iter_lines():
-                        event = _parse_sse_json(line)
-                        if not event:
-                            continue
-                        if event.get("type") == "error" or event.get("error"):
-                            raise RuntimeError(f"AI生图接口返回错误: {event.get('error') or event}")
-                        data = event
-                        b64_json = _find_image_base64(event)
-                        if b64_json:
-                            return b64_json
-                    if data is None:
-                        raise RuntimeError("AI生图接口没有返回有效stream事件")
-                    raise RuntimeError(f"AI生图响应中没有图片base64: {_redact_image_response(data)}")
-                else:
-                    data = response.json()
-                    b64_json = _find_image_base64(data)
-                    if b64_json:
-                        return b64_json
-                    raise RuntimeError(f"AI生图响应中没有图片base64: {_redact_image_response(data)}")
-            except Exception as e:
-                last_error = e
-                if attempt >= retries:
-                    break
-                sleep_seconds = min(2 ** (attempt - 1), 8)
-                logger.warning("AI生图请求失败，%s秒后重试(%s/%s): %s", sleep_seconds, attempt, retries, e)
-                time.sleep(sleep_seconds)
-    if last_error:
-        raise last_error
-    raise RuntimeError("AI生图请求未执行")
-
-
-def generate_ai_cover(files, video_info, cover_auto_config):
+def generate_ai_cover(files, video_info, cover_auto_config, ai_client=None):
     ai_config = (cover_auto_config or {}).get("ai") or {}
     if not ai_config.get("enabled", False):
         return None
 
-    api_key = _get_api_key(ai_config)
-    if not api_key:
-        logger.warning("AI封面已开启，但未找到API密钥，请设置 %s 或 cover_auto.ai.api_key", ai_config.get("api_key_env") or "DMR_IMAGE_API_KEY")
+    if not ai_client or not ai_client.available:
+        status = ai_client.availability() if ai_client else {'reason': '统一AI客户端不可用'}
+        logger.warning("AI封面已开启，但统一AI配置不完整: %s", status.get('reason'))
         return None
 
     danmaku_analysis = {}
@@ -582,7 +367,7 @@ def generate_ai_cover(files, video_info, cover_auto_config):
         )
         if danmaku_analysis.get("total", 0) > 0:
             try:
-                ai_prompt = analyze_danmaku_with_ai(ai_config, video_info, danmaku_analysis, api_key)
+                ai_prompt = analyze_danmaku_with_ai(ai_config, video_info, danmaku_analysis, ai_client)
             except Exception as e:
                 logger.warning("AI弹幕分析失败，将使用本地弹幕热点结果生成封面: %s", e)
         summary_log = _format_ai_summary_for_log(danmaku_analysis, ai_prompt)
@@ -598,7 +383,6 @@ def generate_ai_cover(files, video_info, cover_auto_config):
     logger.info("AI封面生图提示词:\n%s", prompt)
     reference_image = _extract_reference_frame(ai_config, video_info, danmaku_analysis)
 
-    timeout = int(ai_config.get("timeout", 120) or 120)
     sizes = _get_image_request_sizes(ai_config, video_info)
     fallback_size = ai_config.get("fallback_size", "1024x1024")
     if fallback_size and fallback_size not in sizes:
@@ -607,17 +391,15 @@ def generate_ai_cover(files, video_info, cover_auto_config):
     last_error = None
     b64_json = None
     for idx, size in enumerate(sizes):
-        image_payload = _responses_image_payload(ai_config, prompt, size, reference_image=reference_image)
         try:
-            b64_json = _request_image_generation(ai_config, api_key, image_payload, timeout)
+            b64_json = ai_client.generate_image(prompt, size, reference_image=reference_image)
             break
         except Exception as e:
             last_error = e
             if reference_image:
                 logger.warning("带参考图AI生图失败，将改用纯文本生图重试当前尺寸 %s: %s", size, e)
                 try:
-                    image_payload = _responses_image_payload(ai_config, prompt, size, reference_image=None)
-                    b64_json = _request_image_generation(ai_config, api_key, image_payload, timeout)
+                    b64_json = ai_client.generate_image(prompt, size, reference_image=None)
                     break
                 except Exception as text_error:
                     last_error = text_error

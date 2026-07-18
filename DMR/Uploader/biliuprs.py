@@ -21,9 +21,11 @@ class biliuprs():
                  task_upload_lock:bool=True,
                  debug=False, 
                  biliup:str=None, 
+                 ai_client=None,
                  **kwargs,
     ) -> None:
         self.biliup = biliup if biliup else ToolsList.get('biliup')
+        self.ai_client = ai_client
 
         if not (cookies or account):
             raise ValueError('cookies or account must be set.')
@@ -230,7 +232,7 @@ class biliuprs():
                     self.logger.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
                     config['cover'] = ''
         if not self.task_info.get('bvid') and config.get('cover_auto'):
-            fix_cover(config, files or video_info)
+            fix_cover(config, files or video_info, ai_client=self.ai_client)
         return config
 
     def upload(self, files:list[VideoInfo], **kwargs):

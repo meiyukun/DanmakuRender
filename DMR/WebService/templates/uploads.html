@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='uploads.css') }}">{% endblock %}
+{% block content %}
+<section class="card upload-hero"><span class="upload-eyebrow">UNIVERSAL UPLOADER</span><h1>视频上传中心</h1><p>从录屏、弹幕版、热点成片和热点小片段中自由选择，作为多分P新投稿或追加到已有稿件。</p></section>
+<div class="upload-layout">
+  <section class="card media-library">
+    <div class="upload-heading"><div><h2>1. 选择视频</h2><p>分页浏览，点击素材加入分P列表</p></div><strong id="upload-library-total">0 个</strong></div>
+    <div class="upload-library-filters">
+      <label>录制任务<select id="upload-task-filter"><option value="">全部任务</option></select></label>
+      <label>素材类型<select id="upload-kind-filter"><option value="*">全部类型</option></select></label>
+      <label>排序<select id="upload-sort"><option value="modified_desc">最后修改：从新到旧</option><option value="modified_asc">最后修改：从旧到新</option><option value="name_asc">名称：A 到 Z</option><option value="name_desc">名称：Z 到 A</option></select></label>
+      <label>每页<select id="upload-page-size"><option value="12">12</option><option value="24" selected>24</option><option value="48">48</option></select></label>
+      <input class="span-all" id="upload-search" type="search" placeholder="搜索文件名、场次或任务名">
+    </div>
+    <div id="upload-library" class="upload-library-list"><div class="upload-empty">正在加载素材…</div></div>
+    <div class="upload-pagination"><button type="button" id="upload-prev-page" class="btn-ghost" disabled>上一页</button><span id="upload-page-status">第 1 / 1 页</span><button type="button" id="upload-next-page" class="btn-ghost" disabled>下一页</button></div>
+  </section>
+  <section class="card upload-editor">
+    <div class="upload-heading"><div><h2>2. 分P顺序</h2><p><strong id="upload-part-count">0</strong> 个视频</p></div><button id="upload-clear-parts" class="btn-ghost">清空</button></div>
+    <div id="upload-parts" class="upload-parts"><div class="upload-empty">从左侧选择视频</div></div>
+    <div class="upload-mode-switch"><label><input type="radio" name="upload-mode" value="new" checked> 新投稿</label><label><input type="radio" name="upload-mode" value="append"> 追加到已有视频</label></div>
+    <div class="upload-form-grid upload-common-fields"><label>上传账号<select id="upload-account"></select></label></div>
+    <section class="upload-cover-panel">
+      <div class="upload-heading"><div><h3>投稿封面</h3><p>不设置、上传图片，或根据视频与热点信息生成</p></div><button type="button" id="upload-cover-clear" class="btn-ghost">清除封面</button></div>
+      <div class="upload-cover-modes">
+        <label><input type="radio" name="upload-cover-mode" value="none" checked> 不设置</label>
+        <label><input type="radio" name="upload-cover-mode" value="file"> 上传封面</label>
+        <label><input type="radio" name="upload-cover-mode" value="ai"> AI 生成</label>
+      </div>
+      <div id="upload-cover-file-panel" hidden><input id="upload-cover-file" type="file" accept="image/jpeg,image/png,image/webp"><small>支持 JPEG、PNG、WebP，最大 10MB；提交前统一处理为 16:10。</small></div>
+      <div id="upload-cover-ai-panel" class="upload-cover-ai" hidden>
+        <p id="upload-cover-ai-availability">正在读取 AI 配置…</p>
+        <div class="upload-form-grid">
+          <label>参考视频<select id="upload-cover-reference-source"><option value="">不使用参考帧</option></select></label>
+          <label>截帧时间（秒）<input id="upload-cover-reference-second" type="number" min="0" step="0.1" value="0"></label>
+          <label class="span-2">AI 补充要求<textarea id="upload-cover-prompt" rows="3" maxlength="2000" placeholder="例如：标题突出爆笑瞬间，简介简洁，封面主标题使用黄色粗体"></textarea></label>
+        </div>
+        <div class="upload-cover-actions"><button type="button" id="upload-cover-reference-button" class="btn-ghost">截取参考帧</button><button type="button" id="upload-cover-prompt-button">AI 一键生成投稿文案和封面提示词</button><span id="upload-cover-generate-status"></span></div>
+        <img id="upload-cover-reference-preview" class="upload-cover-reference-preview" alt="AI参考帧" hidden>
+        <div id="upload-cover-final-prompt-panel" class="upload-cover-final-prompt" hidden>
+          <label>完整生图提示词（AI 已生成，可继续编辑）<textarea id="upload-cover-final-prompt" rows="9" maxlength="8000"></textarea></label>
+          <div class="upload-cover-actions"><button type="button" id="upload-cover-generate-button">确认提示词并生成封面</button><small>点击后才会调用生图接口。</small></div>
+        </div>
+      </div>
+      <div id="upload-cover-result" class="upload-cover-result" hidden><img id="upload-cover-preview" alt="投稿封面预览"><div><strong>当前所选封面</strong><small id="upload-cover-result-label"></small></div></div>
+      <label id="upload-cover-append-confirm" class="inline-check upload-cover-warning" hidden><input id="upload-cover-replace-confirmed" type="checkbox"> 我确认替换整个已有稿件的封面</label>
+    </section>
+    <div id="append-fields" class="upload-form-grid" hidden>
+      <label class="span-2">选择最近投稿<select id="upload-submission"><option value="">切换到追加模式后读取</option></select><small id="upload-submission-status">切换到追加模式后自动读取</small></label>
+      <label id="upload-bvid-custom-field" hidden>目标 BV 号<input id="upload-bvid" placeholder="例如 BV1xx411c7mD"></label>
+      <label class="inline-check"><input id="upload-insert-head" type="checkbox"> 新分P插入稿件开头</label>
+    </div>
+    <div id="new-fields" class="upload-form-grid">
+      <small id="upload-metadata-status" class="span-2">填写新投稿信息。</small>
+      <label class="span-2">标题<input id="upload-title" maxlength="80" placeholder="投稿标题"></label>
+      <label class="span-2">简介<textarea id="upload-desc" rows="5" placeholder="视频简介"></textarea></label>
+      <label class="span-2">动态<textarea id="upload-dynamic" rows="2" placeholder="发布动态文字"></textarea></label>
+      <label>标签<input id="upload-tag" placeholder="使用英文逗号分隔"></label><label>分区 ID<input id="upload-tid" type="number" value="21"></label>
+      <label>稿件类型<select id="upload-copyright"><option value="1">自制</option><option value="2">转载</option></select></label>
+      <label>转载来源<input id="upload-source" placeholder="自制稿件可留空"></label>
+      <label>定时发布<input id="upload-scheduled" type="datetime-local"></label>
+      <label>加入合集<select id="upload-season"><option value="">不加入合集</option></select><small id="upload-season-status">选择账号后自动读取</small></label>
+      <label id="upload-season-custom-field" hidden>自定义合集 ID<input id="upload-season-custom" type="number" min="1" placeholder="输入合集 ID"></label>
+      <label>合集小节<input id="upload-section-title" placeholder="为空则使用最后一个小节"></label>
+      <label>合集单集标题<input id="upload-episode-title" placeholder="为空则使用投稿标题"></label>
+      <label class="inline-check span-2"><input id="upload-private" type="checkbox"> 仅自己可见</label>
+    </div>
+    <div class="upload-submit"><button id="upload-submit-button" disabled>确认并提交上传</button><span id="upload-submit-status"></span></div>
+  </section>
+</div>
+<div id="upload-toast" class="upload-toast" hidden></div>
+<div id="upload-preview-modal" class="upload-preview-backdrop" hidden>
+  <div class="upload-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="upload-preview-title">
+    <div class="upload-preview-heading"><div><span class="upload-eyebrow">VIDEO PREVIEW</span><h3 id="upload-preview-title">视频预览</h3></div><button type="button" id="upload-preview-close" class="btn-ghost">关闭</button></div>
+    <video id="upload-preview-video" controls preload="metadata"></video>
+    <p id="upload-preview-status">浏览器将按需读取视频，不会预先加载整个文件。</p><a id="upload-preview-open" class="btn-ghost" target="_blank">在新窗口打开原文件</a><button type="button" id="upload-preview-reference" class="btn-ghost">将当前画面设为 AI 参考帧</button>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='uploads.js') }}"></script>{% endblock %}

@@ -13,12 +13,13 @@ from .utils import *
 
 
 class DMREngine():
-    def __init__(self):
+    def __init__(self, ai_client=None):
         self.logger = logging.getLogger(__name__)
         self.task_dict = {}
         self.plugin_dict = {}
         self.recv_queue = None
         self.stoped = True
+        self.ai_client = ai_client
         
     def pipeSend(self, message:PipeMessage):
         target = message.target
@@ -94,7 +95,7 @@ class DMREngine():
         if name == 'render':
             plugin = Render((self.recv_queue, send_queue), **config)
         elif name == 'uploader':
-            plugin = Uploader((self.recv_queue, send_queue), **config)
+            plugin = Uploader((self.recv_queue, send_queue), ai_client=self.ai_client, **config)
         elif name == 'transcriber':
             plugin = Transcriber((self.recv_queue, send_queue), **config)
         elif name == 'cleaner':
@@ -102,7 +103,7 @@ class DMREngine():
         elif name == 'downloader':
             plugin = Downloader((self.recv_queue, send_queue), **config)
         elif name == 'webservice':
-            plugin = WebService((self.recv_queue, send_queue), engine=self, **config)
+            plugin = WebService((self.recv_queue, send_queue), engine=self, ai_client=self.ai_client, **config)
         else:
             self.logger.error(f'Unknown plugin {name}.')
             # raise Exception(f'Unknown plugin {name}.')
@@ -121,7 +122,7 @@ class DMREngine():
     def add_task(self, taskname, config, task_type='replay'):
         send_queue = queue.Queue()
         task_cls = HighlightTask if task_type == 'highlight' else ReplayTask
-        task = task_cls(taskname, config, (self.recv_queue, send_queue))
+        task = task_cls(taskname, config, (self.recv_queue, send_queue), ai_client=self.ai_client)
         task_key = f'{task_type}/{taskname}'
         self.task_dict[task_key] = {
             'class': task,

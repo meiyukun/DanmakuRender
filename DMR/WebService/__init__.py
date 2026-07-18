@@ -11,6 +11,7 @@ class WebService:
                  web_api=True,
                  engine=None,
                  runtime_controller=None,
+                 ai_client=None,
                  **kwargs,
                  ) -> None:
         
@@ -18,6 +19,7 @@ class WebService:
         self.web_api = web_api
         self.engine = engine
         self.runtime_controller = runtime_controller
+        self.ai_client = ai_client
         self.kwargs = kwargs
 
         self.logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ class WebService:
                 (self.send_queue, self.recv_queue),
                 engine=self.engine,
                 runtime_controller=self.runtime_controller,
+                ai_client=self.ai_client,
                 **self.kwargs,
             )
             self.web_api.start()

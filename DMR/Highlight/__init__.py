@@ -6,8 +6,6 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import requests
-
 from DMR.utils import (
     DateTimeDecoder, FFprobe, PipeMessage, VideoInfo, atomic_json_dump,
     video_info_from_dict, uuid,
@@ -31,6 +29,33 @@ def filter_clip_candidates(candidates, categories):
     return [candidate for candidate in candidates
             if "*" in allowed or candidate.get("category") in allowed]
 
+
+def attach_subtitle_excerpts(candidates, subtitles, padding=6.0, max_lines=20):
+    """给热点候选附加邻近字幕正文，供后续标题和封面文案提炼。"""
+    enriched = []
+    for candidate in candidates:
+        item = dict(candidate)
+        start = float(item.get("start", 0)) - max(0, float(padding))
+        end = float(item.get("end", 0)) + max(0, float(padding))
+        excerpt, seen = [], set()
+        for line in subtitles:
+            text = str(line.get("text") or "").strip()
+            if not text or text in seen:
+                continue
+            if float(line.get("end", 0)) <= start or float(line.get("start", 0)) >= end:
+                continue
+            seen.add(text)
+            excerpt.append({
+                "start": round(float(line.get("start", 0)), 3),
+                "end": round(float(line.get("end", 0)), 3),
+                "text": text[:300],
+            })
+            if len(excerpt) >= max(1, int(max_lines)):
+                break
+        item["subtitle_excerpt"] = excerpt
+        enriched.append(item)
+    return enriched
+
 DEFAULT_AI_SYSTEM = (
     "你是直播内容剪辑审核员。只能依据候选区间内带时间戳的弹幕、字幕和统计特征，"
     "判断它是否是直播内容本身产生的精彩片段。福袋、口令、抽奖、礼物感谢、欢迎告别、"
@@ -48,6 +73,7 @@ class Highlight:
         self.failed_tasks = {}
         self.executors = ThreadPoolExecutor(max_workers=max(1, int(nhighlights)))
         self._lock = threading.Lock()
+        self.ai_client = kwargs.get('ai_client')
         suffix = f"_{state_name}" if state_name else ""
         self.active_file = f".temp/active_highlights{suffix}.json"
         self.failed_file = f".temp/failed_highlights{suffix}.json"
@@ -170,12 +196,14 @@ class Highlight:
     def _ai_review(self, candidates, subtitles, config):
         ai = config.get("ai") or {}
         if not ai.get("enabled") or not candidates:
-            return candidates
-        api_key = os.getenv(ai.get("api_key_env", "DMR_HIGHLIGHT_API_KEY")) or ai.get("api_key")
-        base_url = str(ai.get("base_url") or "").rstrip("/")
-        if not api_key or not base_url:
+            return [dict(candidate, ai_reviewed=False, ai_keep=True, ai_status="disabled")
+                    for candidate in candidates]
+        if not self.ai_client or not self.ai_client.available:
             self.logger.warning("热点AI未配置完整，使用严格本地结果兜底")
-            return self._strict_fallback(candidates)
+            fallback_ids = {str(item.get("id")) for item in self._strict_fallback(candidates)}
+            return [dict(candidate, ai_reviewed=False,
+                         ai_keep=str(candidate.get("id")) in fallback_ids, ai_status="fallback")
+                    for candidate in candidates]
         allowed = set((config.get("categories") or {
             "funny": {}, "skill": {}, "absurd": {}, "fail": {},
             "emotional": {}, "other_content": {},
@@ -212,38 +240,31 @@ class Highlight:
                     }]},
                     "candidates": material,
                 }
-                response = requests.post(
-                    f"{base_url}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": ai.get("model", "gpt-5.4"),
-                        "messages": [
-                            {"role": "system", "content": ai.get("system_prompt") or DEFAULT_AI_SYSTEM},
-                            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                        ],
-                        "max_tokens": int(ai.get("max_tokens", 1800)),
-                    },
-                    timeout=int(ai.get("timeout", 120)),
-                )
-                response.raise_for_status()
-                content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                content = self.ai_client.chat('highlight_review', [
+                    {"role": "system", "content": ai.get("system_prompt") or DEFAULT_AI_SYSTEM},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ])
                 result = self._extract_json(content) or {}
                 decisions = {item.get("id"): item for item in result.get("candidates", [])}
                 for candidate in batch:
                     decision = decisions.get(candidate["id"])
-                    if not decision or not decision.get("keep"):
-                        continue
-                    confidence = float(decision.get("confidence", 0))
-                    if confidence < float(ai.get("min_confidence", 0.65)):
-                        continue
-                    category = decision.get("category")
-                    if category not in allowed:
-                        category = "other_content"
                     candidate = dict(candidate)
+                    confidence = float((decision or {}).get("confidence", 0))
+                    keep = bool(decision and decision.get("keep") and
+                                confidence >= float(ai.get("min_confidence", 0.65)))
+                    category = (decision or {}).get("category")
+                    if category not in allowed:
+                        category = None
                     candidate.update({
-                        "category": category, "ai_confidence": confidence,
-                        "ai_title": decision.get("title", ""), "ai_reason": decision.get("reason", ""),
+                        "ai_reviewed": bool(decision), "ai_keep": keep,
+                        "ai_status": "approved" if keep else "rejected",
+                        "ai_confidence": confidence,
+                        "ai_category": category,
+                        "ai_title": (decision or {}).get("title", ""),
+                        "ai_reason": (decision or {}).get("reason", ""),
                     })
+                    if keep and category:
+                        candidate["category"] = category
                     reviewed.append(candidate)
             reviewed.sort(
                 key=lambda item: (item.get("score", 0), item.get("ai_confidence", 0), item["peak_height"]),
@@ -252,7 +273,10 @@ class Highlight:
             return reviewed
         except Exception as error:
             self.logger.warning("热点AI复核失败，使用严格本地结果兜底: %s", error)
-            return self._strict_fallback(candidates)
+            fallback_ids = {str(item.get("id")) for item in self._strict_fallback(candidates)}
+            return [dict(candidate, ai_reviewed=False,
+                         ai_keep=str(candidate.get("id")) in fallback_ids, ai_status="fallback")
+                    for candidate in candidates]
 
     @staticmethod
     def _strict_fallback(candidates):
@@ -281,7 +305,10 @@ class Highlight:
                 if duration <= 0:
                     continue
                 base_info = base_info or video
-                segments.append({"path": video.path, "duration": duration, "offset": offset})
+                segments.append({
+                    "path": video.path, "duration": duration, "offset": offset,
+                    "subtitle": item.get("subtitle"),
+                })
                 danmaku_source = str(config.get("danmaku_source", "auto")).lower()
                 raw_dm_file = item.get("raw_dm_file")
                 ass_dm_file = item.get("dm_file")
@@ -309,6 +336,8 @@ class Highlight:
             analysis = find_hotspots(danmaku, offset, config.get("detection") or {})
             analysis["danmaku_sources"] = danmaku_sources
             candidates = self._ai_review(analysis["candidates"], subtitles, config)
+            candidates = attach_subtitle_excerpts(candidates, subtitles)
+            analysis["candidates"] = candidates
             # dryrun-only end-to-end validation: real analysis still runs first; when the
             # short sample contains no hotspot, encode one marked test clip to verify FFmpeg.
             fallback_seconds = min(offset, max(0, float(config.get("test_fallback_clip_seconds", 0))))
@@ -317,7 +346,9 @@ class Highlight:
                     "id": "dryrun-fallback", "start": 0.0, "end": fallback_seconds,
                     "peak": 0.0, "peak_height": 0, "prominence": 0, "score": 0,
                     "category": "other_content", "test_fallback": True,
+                    "ai_reviewed": False, "ai_keep": True, "ai_status": "test_fallback",
                 }]
+            auto_candidates = [candidate for candidate in candidates if candidate.get("ai_keep", True)]
             requested_profiles = []
             for profile in config.get("outputs") or DEFAULT_PROFILES:
                 profile = dict(profile)
@@ -339,8 +370,11 @@ class Highlight:
                 "max_total_duration": float(limit_profile.get("max_total_duration", 300)),
                 "output_name": limit_profile.get("output_name"),
             }
-            clip_candidates = filter_clip_candidates(candidates, combined_profile["categories"])
-            selected = select_profile(clip_candidates, combined_profile) if requested_profiles else []
+            # The clip library intentionally keeps every local hotspot candidate. AI review,
+            # category profiles and duration/count limits only decide the initial automatic mix.
+            clip_candidates = candidates
+            output_candidates = filter_clip_candidates(auto_candidates, combined_profile["categories"])
+            selected = select_profile(output_candidates, combined_profile) if requested_profiles else []
 
             output_dir = config.get("output_dir") or os.path.dirname(base_info.path) + "（高能混剪）"
             manifest_path = os.path.join(
@@ -350,7 +384,7 @@ class Highlight:
             task["status"] = "rendering"
             with self._lock:
                 self._save()
-            if candidates and requested_profiles:
+            if clip_candidates:
                 try:
                     outputs, clip_records, encoding_mode = render_highlight(
                         segments, clip_candidates, selected, output_dir, base_info, config, combined_profile, self.logger
@@ -370,15 +404,24 @@ class Highlight:
                 outputs, clip_records, encoding_mode = [], [], config.get("mode", "copy")
             for output in outputs:
                 output.highlight_manifest = manifest_path
+            streamer = getattr(base_info, "streamer", None)
+            streamer_name = (streamer.get("name") if isinstance(streamer, dict)
+                             else getattr(streamer, "name", None))
             manifest = {
                 "version": 2, "taskname": task.get("taskname"), "source_task": task.get("source_task"),
                 "group_id": task.get("group_id"),
+                "streamer_name": str(streamer_name or task.get("source_task") or ""),
                 "subtitle_status": task.get("subtitle_status"), "analysis": analysis,
+                "source_segments": [{
+                    "path": item.get("path"), "duration": item.get("duration"),
+                    "offset": item.get("offset"), "subtitle": item.get("subtitle"),
+                } for item in segments],
                 "source_segment_count": task.get("source_segment_count", len(task.get("segments", []))),
                 "analyzed_segment_count": len(task.get("segments", [])),
                 "ignored_segments": task.get("ignored_segments", []),
-                "selected_candidates": candidates,
+                "selected_candidates": auto_candidates,
                 "clip_candidates": [str(item.get("id")) for item in clip_candidates],
+                "auto_selected_candidates": [str(item.get("id")) for item in selected],
                 "requested_outputs": [item["id"] for item in requested_profiles],
                 "initial_mix": {"id": combined_profile["id"],
                                 "clip_ids": [str(item.get("id")) for item in selected]},
@@ -390,12 +433,19 @@ class Highlight:
                 } for output in outputs],
             }
             write_manifest(manifest_path, manifest)
-            result = {"outputs": outputs, "manifest": manifest_path}
+            result = {"outputs": outputs, "manifest": manifest_path,
+                      "clip_count": len(clip_records)}
             with self._lock:
                 task["status"] = "completion_pending"
                 task["result"] = result
                 self._save()
-            self._send("end", "热点混剪完成" if outputs else "未发现满足条件的热点片段", task, result)
+            if outputs:
+                message = "热点混剪完成"
+            elif clip_records:
+                message = f"已保留 {len(clip_records)} 个候选素材，未生成自动混剪"
+            else:
+                message = "未发现满足条件的热点片段"
+            self._send("end", message, task, result)
         except Exception as error:
             self.logger.exception("热点混剪失败: %s", error)
             with self._lock:

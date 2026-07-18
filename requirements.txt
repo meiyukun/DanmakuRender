@@ -18,4 +18,5 @@ rsa
 pillow
 moviepy
 flask
+python-dotenv
 

@@ -11,7 +11,7 @@ from ..utils import *
 
 
 class ReplayTask():
-    def __init__(self, taskname, config:dict, pipe:Tuple[queue.Queue, queue.Queue]):
+    def __init__(self, taskname, config:dict, pipe:Tuple[queue.Queue, queue.Queue], ai_client=None):
         self.send_queue, self.recv_queue = pipe
         self.taskname = taskname
         self.config = config

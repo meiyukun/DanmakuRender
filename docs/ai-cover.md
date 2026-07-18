@@ -1,49 +1,44 @@
-# AI 封面生成说明
+# AI 封面与统一 AI 配置
 
-DanmakuRender 的 B 站自动封面支持使用 AI 生成图片。流程为：
+DanmakuRender 使用统一 AI 组件处理封面内容分析、Responses 生图和热点候选复核。业务模块不再分别配置接口地址、密钥或模型。
 
-1. 手动配置 `cover` 时，直接使用手动封面。
-2. 开启 `cover_auto.enabled` 后，会先尝试 AI 封面。
-3. AI 失败时，回退到本地视频帧叠字封面。
+## 全局配置
 
-## 生图接口
+在全局 YAML 中配置公共接口和各项能力使用的模型：
 
-图像生成使用 OpenAI Responses 兼容接口：
-
-```http
-POST /v1/responses
+```yaml
+ai:
+  base_url: ''
+  api_key: ''
+  timeout: 120
+  capabilities:
+    cover_analysis:
+      model: gpt-5.4
+      max_tokens: 1200
+    highlight_review:
+      model: gpt-5.4
+      max_tokens: 1800
+    image_generation:
+      model: gpt-5.5
+      stream: False
+      retries: 3
+      fallback_non_stream: True
 ```
 
-请求中使用 `image_generation` 内置工具：
+推荐在项目根目录 `.env` 中保存本机凭据：
 
-```json
-{
-  "model": "gpt-5.5",
-  "stream": false,
-  "input": [
-    {
-      "role": "user",
-      "content": "为B站视频生成一张高点击率完整封面。"
-    }
-  ],
-  "tools": [
-    {
-      "type": "image_generation",
-      "size": "1536x1024",
-      "output_format": "png",
-      "background": "opaque",
-      "moderation": "auto",
-      "partial_images": 0
-    }
-  ]
-}
+```dotenv
+DMR_AI_BASE_URL=https://your-ai-proxy.example.com
+DMR_AI_API_KEY=your-api-key
 ```
 
-注意：中转服务会把 `image_generation` 的生图后端固定为 `gpt-image-2`，配置中的 `response_model` 只是 `/v1/responses` 的 `model` 字段。
+固定只读取这两个变量名，不提供 `api_key_env` 或 `base_url_env`。优先级为：操作系统环境变量、根目录 `.env`、全局 YAML、默认空值。`.env` 已被 Git 忽略，不应提交。
 
-## 关键配置
+`base_url` 不要包含结尾 `/v1`。配置变更需要重启程序。
 
-配置位置：
+## 自动上传封面
+
+上传目标仍通过局部业务配置决定是否启用封面及提示词：
 
 ```yaml
 upload_args:
@@ -52,118 +47,59 @@ upload_args:
       enabled: True
       ai:
         enabled: True
+        analyze_danmaku: True
+        use_reference_image: True
+        size: 1536x1024
+        analysis_prompt: |
+          视频标题：{TITLE}
+          主播：{STREAMER.NAME}
+          弹幕热点资料：
+          {DANMAKU_COMPACT}
+
+          请直接输出一段完整的AI生图提示词。
+        prompt: |
+          为B站视频生成一张高点击率完整封面。
+          视频标题：{TITLE}
+          弹幕内容分析：{DANMAKU_SUMMARY}
 ```
 
-常用 AI 配置：
+- `analyze_danmaku`：清洗并压缩弹幕热点，再由文本 AI 整理完整生图提示词。
+- `use_reference_image`：从真实视频画面截帧并随提示词提交。
+- `size`、`size_candidates`、`fallback_size`：封面业务使用的生图尺寸。
+- `analysis_prompt`：文本分析提示词。
+- `prompt`：文本分析失败或无有效弹幕时的本地兜底提示词。
+- `analysis_system_prompt`、`analysis_mode`、`analysis_max_items`、`analysis_max_chars`、`analysis_bucket_seconds`、`reference_image`：可选业务参数。
 
-```yaml
-base_url: 'https://your-ai-proxy.example.com'
-api_key_env: DMR_IMAGE_API_KEY
-api_key: ''
-response_model: gpt-5.5
-analysis_model: gpt-5.5
-analyze_danmaku: True
-use_reference_image: True
-size: 1536x1024
-timeout: 120
-image_retries: 3
-analysis_prompt: |
-  视频标题：{TITLE}
-  主播：{STREAMER.NAME}
-  弹幕热点资料：
-  {DANMAKU_COMPACT}
+URL、Key、模型、超时、最大输出和请求重试不得再写入 `cover_auto.ai`，否则配置解析会提示迁移错误。
 
-  请直接输出一段完整的AI生图提示词，用于生成B站视频封面。
-prompt: |
-  为B站视频生成一张高点击率完整封面。
-  视频标题：{TITLE}
-  弹幕内容分析：{DANMAKU_SUMMARY}
-```
+AI 生图失败时，自动上传流程仍会回退到本地视频帧叠字封面。
 
-参数说明：
+## 上传中心
 
-- `base_url`：中转 API 地址，不要带结尾 `/v1`。
-- `api_key_env`：优先读取的环境变量名。
-- `api_key`：明文密钥兜底，不建议提交到仓库。
-- `response_model`：`/v1/responses` 的 `model` 字段；生图后端由中转固定为 `gpt-image-2`。
-- `analysis_model`：文本 AI 分析弹幕并生成完整生图提示词的模型。
-- `analyze_danmaku`：是否读取弹幕热点，让文本 AI 生成更贴近本次视频内容的完整生图提示词。
-- `use_reference_image`：是否从直播/视频真实画面截一帧作为生图参考图。
-- `size`：固定生图尺寸。设置后只尝试这个尺寸。
-- `timeout`：单次请求超时时间，单位秒。
-- `image_retries`：每个尺寸的生图请求重试次数。
-- `analysis_prompt`：文本 AI 的用户提示词。文本 AI 成功时，它的输出会直接作为最终生图提示词。
-- `prompt`：本地兜底生图提示词。文本 AI 失败、未启用弹幕分析或没有有效弹幕时使用。
+上传中心支持三种封面模式：
 
-以下高级参数仍可在 `cover_auto.ai` 中手动添加，但默认配置文件不再展示：`stream`、`fallback_non_stream`、`size_candidates`、`fallback_size`、`output_format`、`output_compression`、`background`、`moderation`、`partial_images`、`analysis_system_prompt`、`analysis_mode`、`analysis_max_items`、`analysis_max_chars`、`analysis_max_tokens`、`analysis_bucket_seconds`、`reference_image`。
+- 不设置：新投稿使用平台默认行为，追加分P保留原稿封面。
+- 上传封面：接受 JPEG、PNG、WebP，最大 10MB。
+- AI 生成：汇总当前投稿信息、所选热点和用户补充要求，通过一次文本 AI 调用同时生成标题、简介、动态和完整生图提示词。四项都会填入页面并允许用户编辑；用户确认提示词后才调用生图接口。可附带任一待上传视频的指定时间参考帧。
 
-## 尺寸选择
+手动上传和 AI 生成结果都会统一转换为 1280×800、16:10 JPEG，页面预览即为最终上传构图。AI 每次生成一张；用户可继续修改已确认的提示词并重生成。
 
-当 `size` 和 `size_candidates` 都为空时，程序按视频比例自动选择官方支持尺寸：
+追加分P选择新封面时必须明确确认；分P与封面通过同一次稿件编辑提交生效。显式选择的封面若校验或平台上传失败，整个上传任务失败，不会静默无封面继续。
 
-- 横屏：`2048x1152`、`1536x1024`、`1024x1024`
-- 竖屏：`1024x1536`、`1024x1024`
-- 方图：`2048x2048`、`1024x1024`
-- 无法获取分辨率：`2048x1152`、`1536x1024`、`1024x1024`
+## 弹幕、热点和参考图
 
-如果中转对大尺寸不稳定，最稳的配置是固定使用：
+自动封面只向文本 AI 发送清洗压缩后的弹幕摘要，不上传完整弹幕文件。上传中心选择热点小片段、自动混剪或自定义混剪时，会从可信热点清单汇总：
 
-```yaml
-size: 1024x1024
-```
+- 热点标题、类别、AI 置信度和复核理由；
+- 起止时间和代表弹幕；
+- 混剪实际包含的热点片段 ID。
 
-## 弹幕分析
+上下文限制约 3500 字符，参考帧所属热点优先。
 
-开启 `analyze_danmaku` 后，程序会先清洗弹幕文件，只保留用于分析的视频内容线索：
+自动封面的参考帧默认取弹幕峰值附近，找不到峰值时取视频中间。上传中心则由用户选择视频和时间点，服务端使用 FFmpeg 截帧，因此源文件即使无法在浏览器播放，也可通过手动时间截取。
 
-- 去除 ASS 样式、坐标、移动特效等无关内容。
-- 过滤空内容、纯符号、明显噪声和过短重复内容。
-- 提取高频弹幕、关键词、互动峰值时段和代表弹幕。
-- 只把压缩后的热点摘要发送给文本 AI，不上传原始完整弹幕文件。
+## 接口与日志
 
-文本 AI 的提示词可配置。文本 AI 成功时，它返回的正文会直接作为最终 AI 生图 prompt，不再要求 JSON，也不会再由程序拼接字段：
+文本能力使用 `POST /v1/chat/completions`，生图使用 `POST /v1/responses` 和 `image_generation` 工具。统一客户端负责流式/非流式响应、重试和错误处理。
 
-```yaml
-analysis_prompt: |
-  视频标题：{TITLE}
-  主播：{STREAMER.NAME}
-  弹幕热点资料：
-  {DANMAKU_COMPACT}
-
-  请直接输出一段完整的AI生图提示词，用于生成B站视频封面。
-```
-
-`prompt` 是本地兜底生图提示词模板。文本 AI 失败、未启用弹幕 AI 分析或无有效弹幕时才使用：
-
-```yaml
-prompt: |
-  为B站视频生成一张高点击率完整封面。
-  视频标题：{TITLE}
-  弹幕内容分析：{DANMAKU_SUMMARY}
-  热点弹幕：{HOT_DANMAKU}
-  关键词：{HOT_KEYWORDS}
-```
-
-## 参考图
-
-开启 `use_reference_image` 后，AI 封面生成会从待上传视频截取一张真实画面，并在 `/v1/responses` 的 `input` 中以 `input_image` 形式随提示词一起提交。这样生成结果能参考直播画面的构图、色调和内容。
-
-截帧策略：
-
-- 有弹幕峰值时，默认取第一个峰值窗口起点后 30 秒。
-- 没有弹幕峰值时，默认取视频中间帧。
-- 参考图默认缩放到最大宽度 1280，JPEG 质量 85。
-
-如果截帧失败、视频路径不可用，程序会直接改用纯文本生图；如果带参考图生图失败，会在同一尺寸下自动降级为纯文本生图。
-
-## 日志
-
-AI 封面流程会输出：
-
-- 弹幕热点分析结果。
-- 文本 AI 成功生成的完整生图提示词。
-- 最终发送给生图模型的提示词。
-- 参考图截帧成功或失败信息。
-- 每个尺寸的失败和重试信息。
-
-日志不会输出 API key 或图片 base64 内容。
+日志可以记录分析摘要、最终提示词和失败原因，但不会输出 API Key、Authorization 或图片 base64。

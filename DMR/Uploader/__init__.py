@@ -3,6 +3,7 @@ import threading
 import queue
 import time
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from os.path import join, exists
 from datetime import datetime
@@ -18,6 +19,7 @@ class Uploader():
     def __init__(self,
                  pipe:Tuple[queue.Queue, queue.Queue],
                  nuploaders:int=1,
+                 ai_client=None,
                  **kwargs,
                  ) -> None:
         
@@ -25,6 +27,7 @@ class Uploader():
         self.send_queue, self.recv_queue = pipe
         self.logger = logging.getLogger(__name__)
         self.kwargs = kwargs
+        self.ai_client = ai_client
 
         self.stoped = True
         self._piperecvprocess = None
@@ -35,6 +38,7 @@ class Uploader():
         self.active_tasks_file = '.temp/active_uploads.json'
         self.load_failed_tasks()
         self.load_interrupted_tasks()
+        self._prune_managed_artifacts()
         
         self.upload_executors = ThreadPoolExecutor(max_workers=self.nuploaders)
         self._lock = threading.Lock()
@@ -124,6 +128,7 @@ class Uploader():
                     self._send_completed_result(task)
                     return True
                 missing = [file.path for file in task.get('files', []) if not exists(file.path)]
+                missing.extend(path for path in task.get('managed_artifacts', []) if not exists(path))
                 if missing:
                     self.last_retry_error = f'待上传文件不存在: {missing}'
                     return False
@@ -145,7 +150,8 @@ class Uploader():
     def delete_failed_task(self, uuid):
         with self._lock:
             if uuid in self.failed_tasks:
-                self.failed_tasks.pop(uuid)
+                task = self.failed_tasks.pop(uuid)
+                self._cleanup_managed_artifacts(task)
                 self.save_failed_tasks()
                 return True
             return False
@@ -213,7 +219,9 @@ class Uploader():
                 'engine': config.get('engine', 'biliuprs'),
                 'args': config.get('args', {}),
                 'files': config.get('files'),
+                'stateless': bool(config.get('stateless')),
                 'stream_queue': stream_queue,
+                'managed_artifacts': list(config.get('managed_artifacts') or []),
                 # 'config': config,
                 'status': 'waiting',
             }
@@ -248,10 +256,16 @@ class Uploader():
                     data=desc,
                 )
             else:
-                task['status'] = 'completion_pending'
                 task['completion_result'] = desc
-                self.save_active_tasks()
-                self._send_completed_result(task)
+                if task.get('stateless'):
+                    self._send_completed_result(task)
+                    self._cleanup_managed_artifacts(task)
+                    self.upload_tasks.pop(task['uuid'], None)
+                    self.save_active_tasks()
+                else:
+                    task['status'] = 'completion_pending'
+                    self.save_active_tasks()
+                    self._send_completed_result(task)
 
     def _send_completed_result(self, task):
         self._pipeSend(
@@ -274,8 +288,46 @@ class Uploader():
             for task_uuid, task in list(self.upload_tasks.items()):
                 if task.get('request_id') == request_id and task.get('status') == 'completion_pending':
                     self.upload_tasks.pop(task_uuid)
+                    self._cleanup_managed_artifacts(task)
                     self.save_active_tasks()
                     return
+
+    @staticmethod
+    def _managed_artifact_root():
+        return os.path.realpath(os.path.join('.temp', 'upload_covers'))
+
+    def _cleanup_managed_artifacts(self, task):
+        root = self._managed_artifact_root()
+        for path in task.get('managed_artifacts', []) or []:
+            real_path = os.path.realpath(path)
+            try:
+                allowed = os.path.commonpath((root, real_path)) == root
+            except ValueError:
+                allowed = False
+            if allowed and os.path.isfile(real_path):
+                try:
+                    os.remove(real_path)
+                except OSError as error:
+                    self.logger.warning('清理上传封面失败 %s: %s', real_path, error)
+
+    def _prune_managed_artifacts(self):
+        root = self._managed_artifact_root()
+        if not os.path.isdir(root):
+            return
+        referenced = {
+            os.path.realpath(path)
+            for task in list(self.upload_tasks.values()) + list(self.failed_tasks.values())
+            for path in (task.get('managed_artifacts') or [])
+        }
+        now = time.time()
+        for name in os.listdir(root):
+            path = os.path.realpath(os.path.join(root, name))
+            if (path not in referenced and os.path.isfile(path) and
+                    now - os.path.getmtime(path) > 24 * 3600):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def _upload_subprocess(self, task):
         task['status'] = 'uploading'
@@ -302,7 +354,10 @@ class Uploader():
                     else:
                         raise ValueError(f'Unknown engine: {engine}')
                     
-                    target_uploader = TargetUploader(**upload_args)
+                    if engine in ('biliuprs', 'biliwebapi'):
+                        target_uploader = TargetUploader(ai_client=self.ai_client, **upload_args)
+                    else:
+                        target_uploader = TargetUploader(**upload_args)
                     self._uploader_pool[upload_group] = {
                         'class': target_uploader,
                         'ctime': time.time(),

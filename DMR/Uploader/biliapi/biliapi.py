@@ -5,6 +5,7 @@ import time
 import requests
 
 BASE_URL = "https://member.bilibili.com/x2/creative/web"
+ARCHIVE_BASE_URL = "https://member.bilibili.com/x/web"
 WRITE_API_INTERVAL = 6
 
 _write_api_lock = threading.Lock()
@@ -38,7 +39,7 @@ def _make_form_headers(cookie: str, referer: str = "https://member.bilibili.com/
 
 def _get(cookie: str, path: str, params: dict) -> dict:
     headers = _make_headers(cookie)
-    resp = requests.get(f"{BASE_URL}{path}", headers=headers, params=params)
+    resp = requests.get(f"{BASE_URL}{path}", headers=headers, params=params, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
@@ -75,6 +76,42 @@ def _post_form(cookie: str, path: str, data: dict) -> dict:
 def get_season(cookie_file: str, season_id: int) -> dict:
     cookie, _ = read_bilibili_cookies(cookie_file)
     return _get(cookie, "/season", {"id": season_id})
+
+
+def get_seasons(cookie_file: str, page: int = 1, page_size: int = 100) -> dict:
+    """获取当前账号创建的合集列表。"""
+    cookie, _ = read_bilibili_cookies(cookie_file)
+    if not cookie:
+        raise ValueError(f"账号文件中没有可用的B站Cookie: {cookie_file}")
+    return _get(cookie, "/seasons", {"pn": int(page), "ps": int(page_size)})
+
+
+def get_archives(cookie_file: str, page: int = 1, page_size: int = 30,
+                 status: str = "pubed") -> dict:
+    """获取当前账号最近的投稿；默认只返回已发布稿件。"""
+    cookie, _ = read_bilibili_cookies(cookie_file)
+    if not cookie:
+        raise ValueError(f"账号文件中没有可用的B站Cookie: {cookie_file}")
+    response = requests.get(
+        f"{ARCHIVE_BASE_URL}/archives", headers=_make_headers(cookie),
+        params={"status": status, "pn": int(page), "ps": int(page_size),
+                "interactive": 1, "coop": 1}, timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_archive_view(cookie_file: str, bvid: str) -> dict:
+    """读取一个已有稿件的完整编辑信息。"""
+    cookie, _ = read_bilibili_cookies(cookie_file)
+    if not cookie:
+        raise ValueError(f"账号文件中没有可用的B站Cookie: {cookie_file}")
+    response = requests.get(
+        f"https://member.bilibili.com/x/vupre/web/archive/view",
+        headers=_make_headers(cookie), params={"bvid": str(bvid)}, timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 # 2. 编辑合集

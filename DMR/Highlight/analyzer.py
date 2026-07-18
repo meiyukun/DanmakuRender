@@ -669,16 +669,19 @@ def find_hotspots(items, duration, config=None):
 
 def select_profile(candidates, profile):
     categories = profile.get("categories", ["*"])
-    selected = [
+    eligible = [
         item for item in candidates
         if "*" in categories or item.get("category") in categories
-    ][:int(profile.get("max_clips", 12))]
+    ]
+    max_clips = max(0, int(profile.get("max_clips", 12)))
     limit = float(profile.get("max_total_duration", 300))
     kept = []
     total = 0.0
-    for item in selected:
+    for item in eligible:
+        if len(kept) >= max_clips:
+            break
         duration = item["end"] - item["start"]
-        if kept and total + duration > limit:
+        if total + duration > limit:
             continue
         kept.append(item)
         total += duration

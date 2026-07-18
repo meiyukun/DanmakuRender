@@ -5,6 +5,8 @@ import logging
 import hashlib
 from copy import deepcopy
 from typing import List
+from pathlib import Path
+from dotenv import load_dotenv
 from DMR.utils import filename_to_taskname, merge_dict, ToolsList
 
 # __all__ = ['Config', 'new_config']
@@ -31,6 +33,8 @@ class Config():
             return None
 
     def _init_config(self):
+        project_root = Path(__file__).resolve().parents[2]
+        load_dotenv(project_root / '.env', override=False, encoding='utf-8')
         with open(self._base_config_path, 'r', encoding='utf-8') as f:
             self._base_config = yaml.safe_load(f)
 
@@ -40,6 +44,8 @@ class Config():
 
         with open(self.global_config_path, 'r', encoding='utf-8') as f:
             _global_config = yaml.safe_load(f)
+        _global_config = _global_config or {}
+        self._validate_local_ai_transport(_global_config)
         self.file_hashes[self.global_config_path] = self._get_file_hash(self.global_config_path)
         
         self.global_config = merge_dict(self.global_config, _global_config)
@@ -60,6 +66,7 @@ class Config():
             with open(config_path, 'r', encoding='utf-8') as f:
                 _replay_config = yaml.safe_load(f)
             _replay_config = _replay_config or {}
+            self._validate_local_ai_transport(_replay_config)
             if any(key in _replay_config for key in ('highlight_args', 'highlight_upload_args')) or \
                     (_replay_config.get('common_event_args') or {}).get('auto_highlight'):
                 raise ValueError('热点剪辑已迁移到独立 DMH-*.yml；请删除直播任务中的 auto_highlight、highlight_args 和 highlight_upload_args。')
@@ -140,6 +147,7 @@ class Config():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 raw = yaml.safe_load(f) or {}
+            self._validate_local_ai_transport(raw)
             if raw.get('task_type') != 'highlight':
                 raise ValueError('DMH 配置必须声明 task_type: highlight。')
             defaults = deepcopy(raw.get('defaults') or {})
@@ -194,6 +202,46 @@ class Config():
             self.logger.error(f'Error loading highlight config {config_path}:')
             self.logger.exception(e)
             return None
+
+    @staticmethod
+    def _validate_local_ai_transport(config):
+        """Reject transport/model settings outside the single top-level ai block."""
+        forbidden = {
+            'base_url', 'base_url_env', 'api_key', 'api_key_env', 'model',
+            'analysis_model', 'response_model', 'timeout', 'analysis_timeout',
+            'image_retries', 'max_tokens', 'analysis_max_tokens', 'stream',
+            'fallback_non_stream', 'output_format', 'output_compression',
+            'background', 'moderation', 'partial_images',
+        }
+        errors = []
+
+        def walk(value, path=''):
+            if isinstance(value, dict):
+                if path == 'ai':
+                    found = sorted({
+                        'api_key_env', 'base_url_env', 'model', 'analysis_model',
+                        'response_model', 'image_retries', 'max_tokens', 'stream',
+                        'analysis_max_tokens', 'fallback_non_stream', 'output_format',
+                        'output_compression', 'background', 'moderation', 'partial_images',
+                    }.intersection(value))
+                    if found:
+                        errors.append(f'{path}: {", ".join(found)}')
+                elif path.endswith('.ai'):
+                    found = sorted(forbidden.intersection(value))
+                    if found:
+                        errors.append(f'{path}: {", ".join(found)}')
+                for key, item in value.items():
+                    walk(item, f'{path}.{key}' if path else str(key))
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    walk(item, f'{path}[{index}]')
+
+        walk(config)
+        if errors:
+            raise ValueError(
+                'AI接口地址、密钥、模型和请求策略已统一迁移到全局 ai 配置；'
+                '请删除以下局部字段并使用 DMR_AI_BASE_URL / DMR_AI_API_KEY：' + '; '.join(errors)
+            )
 
     def check_update(self):
         updated_tasks = []

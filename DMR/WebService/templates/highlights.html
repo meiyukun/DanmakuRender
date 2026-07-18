@@ -9,26 +9,34 @@
     <span class="eyebrow">HIGHLIGHT STUDIO</span>
     <h1>热点剪辑工作台</h1>
     <p>从整场直播中生成独立热点素材，自由选择、排序并拼成你想要的版本。</p>
+    <nav class="studio-shortcuts" aria-label="页面快捷入口">
+      <a href="#create-highlight">创建任务</a>
+      <a href="#highlight-library">浏览素材库</a>
+    </nav>
   </div>
   <div class="hero-stat"><strong id="hero-result-count">0</strong><span>已分析场次</span></div>
 </section>
 
-<section class="card setup-card">
+<section class="card setup-card" id="create-highlight">
   <div class="section-heading">
     <div><span class="step-index">01</span><h2>创建热点任务</h2></div>
     <p>选择已结束的直播场次。手动任务默认不上传。</p>
   </div>
   <div class="setup-toolbar">
     <label class="field"><span>录制任务</span><select id="task-filter"></select></label>
+    <label class="field session-search-field"><span>筛选场次</span><input id="session-search" type="search" placeholder="搜索时间、标题或场次 ID"></label>
+    <label class="field compact-field"><span>每页</span><select id="session-page-size"><option value="8">8 场</option><option value="15">15 场</option><option value="30">30 场</option></select></label>
     <button type="button" class="btn-secondary" id="scan-button">扫描旧录像</button>
     <span id="scan-status" class="inline-status" aria-live="polite"></span>
   </div>
   <div id="session-list" class="session-list"></div>
+  <div id="session-pagination" class="pagination-bar"></div>
 </section>
 
 <section class="card setup-card" id="manual-panel" hidden>
   <div class="section-heading">
     <div><span class="step-index">02</span><h2 id="selected-title">剪辑设置</h2></div>
+    <button type="button" class="btn-ghost" id="close-manual-panel">取消本次选择</button>
   </div>
   <div id="segment-list" class="option-grid"></div>
   <div class="form-grid">
@@ -42,7 +50,7 @@
   <div class="submit-row"><button type="button" id="submit-manual">开始热点剪辑</button><span id="submit-status" class="inline-status" aria-live="polite"></span></div>
 </section>
 
-<section class="card library-shell">
+<section class="card library-shell" id="highlight-library">
   <div class="section-heading library-heading">
     <div><span class="step-index">03</span><h2>热点素材库</h2></div>
     <p>每张卡片都是一个独立热点事件。点击卡片空白处选择，点击视频正常播放。</p>
@@ -50,23 +58,44 @@
   <div class="result-filters">
     <label class="field"><span>场次</span><select id="result-session-filter"></select></label>
     <label class="field"><span>类别</span><select id="result-category-filter"><option value="*">全部类别</option></select></label>
+    <label class="field"><span>入选状态</span><select id="result-review-filter"><option value="*">全部素材</option><option value="auto">已进入自动成片</option><option value="reserve">备选素材</option><option value="rejected">AI 未入选</option></select></label>
+    <label class="field clip-search-field"><span>搜索素材</span><input id="clip-search" type="search" placeholder="标题、类别或片段 ID"></label>
     <div class="filter-actions">
       <button type="button" class="btn-ghost" data-bulk="all">全选当前</button>
       <button type="button" class="btn-ghost" data-bulk="invert">反选当前</button>
       <button type="button" class="btn-ghost" data-bulk="clear">清空</button>
     </div>
   </div>
+  <details class="batch-result-manager" id="batch-result-manager">
+    <summary>批量管理热点场次</summary>
+    <div id="result-batch-list" class="batch-result-list"></div>
+    <div class="batch-result-actions"><button type="button" class="btn-ghost" data-result-batch="all">全选</button><button type="button" class="btn-ghost" data-result-batch="clear">清空</button><button type="button" class="btn-danger" id="batch-delete-results">删除选中的场次</button></div>
+  </details>
   <div id="highlight-results" class="highlight-results"><div class="loading-state"><span class="spinner"></span>正在加载热点素材…</div></div>
 </section>
 
-<aside id="remix-workbench" class="remix-workbench" aria-label="混剪工作台">
-  <div class="workbench-summary">
-    <div><strong id="selected-count">0</strong><span> 个片段</span></div>
-    <div><strong id="selected-duration">0:00</strong><span> 总时长</span></div>
+<aside id="remix-workbench" class="remix-workbench collapsed" aria-label="混剪工作台">
+  <div class="workbench-header">
+    <div class="workbench-heading">
+      <span class="eyebrow">REMIX BOARD</span>
+      <div class="workbench-summary">
+        <div><strong id="selected-count">0</strong><span> 个片段</span></div>
+        <div><strong id="selected-duration">0:00</strong><span> 总时长</span></div>
+      </div>
+    </div>
+    <label class="workbench-name">
+      <span>混剪名称</span>
+      <input id="remix-output-name" type="text" maxlength="80" placeholder="例如：七月爆笑高能合集">
+    </label>
+    <button type="button" class="btn-ghost workbench-toggle" id="toggle-workbench" aria-expanded="false">展开</button>
   </div>
-  <div id="workbench-items" class="workbench-items"></div>
-  <div class="workbench-actions"><button type="button" class="btn-ghost" id="clear-selection">清空</button><button type="button" id="recompose-button" disabled>另存为新混剪</button></div>
-  <span id="remix-status" class="inline-status" aria-live="polite"></span>
+  <div id="workbench-body" class="workbench-body">
+    <div id="workbench-items" class="workbench-items"></div>
+    <div class="workbench-footer">
+      <span id="remix-status" class="inline-status" aria-live="polite">拖动素材卡片或使用前移、后移调整播放顺序</span>
+      <div class="workbench-actions"><button type="button" class="btn-ghost" id="clear-selection">清空</button><button type="button" id="recompose-button" disabled>生成自定义混剪</button></div>
+    </div>
+  </div>
 </aside>
 
 <div id="confirm-modal" class="modal-backdrop" hidden>

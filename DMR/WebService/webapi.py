@@ -6,11 +6,20 @@ import os
 import yaml
 import glob
 import json
+import math
+import mimetypes
 import re
+import time
+import hashlib
+import subprocess
+import shutil
+import base64
 from flask import Flask, request, render_template, redirect, url_for, flash, session, send_file
 from functools import wraps
 from copy import deepcopy
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from PIL import Image, ImageOps
 from werkzeug.serving import make_server
 
 from DMR.utils import *
@@ -73,6 +82,7 @@ class WebApi:
             pipe:Tuple[queue.Queue, queue.Queue],
             engine=None,
             runtime_controller=None,
+            ai_client=None,
             host='0.0.0.0',
             port=5000,
             force_login=True,
@@ -83,6 +93,7 @@ class WebApi:
         self.send_queue, self.recv_queue = pipe
         self.engine = engine
         self.runtime_controller = runtime_controller
+        self.ai_client = ai_client
         self.kwargs = kwargs
         
         # WebAPI Config
@@ -99,6 +110,16 @@ class WebApi:
         self.stoped = True
         self.highlight_scans = {}
         self.highlight_scan_lock = threading.Lock()
+        self.highlight_thumbnail_lock = threading.Lock()
+        self.upload_library_cache = {'time': 0.0, 'items': []}
+        self.upload_library_lock = threading.Lock()
+        self.cover_token_lock = threading.Lock()
+        self.cover_tokens = {}
+        self.cover_job_lock = threading.Lock()
+        self.cover_jobs = {}
+        self.cover_executor = ThreadPoolExecutor(max_workers=2)
+        self.cover_artifact_dir = os.path.realpath(os.path.join('.temp', 'upload_covers'))
+        os.makedirs(self.cover_artifact_dir, exist_ok=True)
 
         self.webapp = None
         self.webserver = None
@@ -164,6 +185,344 @@ class WebApi:
         def highlights_page():
             return render_template('highlights.html', sessions=self.get_highlight_sessions(),
                                    tasknames=self.get_replay_task_names())
+
+        @app.route('/uploads')
+        @self.login_required
+        def upload_center_page():
+            return render_template('uploads.html')
+
+        @app.route('/api/upload/options')
+        @self.login_required
+        def upload_options_api():
+            ai_cover = (self.ai_client.availability() if self.ai_client
+                        else {'available': False, 'reason': '统一AI客户端不可用'})
+            return {'status': 'success', 'accounts': self.get_upload_accounts(),
+                    'defaults': self.get_upload_defaults(),
+                    'seasons': self.get_known_seasons(), 'ai_cover': ai_cover}
+
+        @app.route('/api/upload/library')
+        @self.login_required
+        def upload_library_api():
+            try:
+                return {'status': 'success', **self.query_upload_library(
+                    page=request.args.get('page', 1), page_size=request.args.get('page_size', 24),
+                    taskname=request.args.get('taskname', ''), kind=request.args.get('kind', '*'),
+                    query=request.args.get('query', ''), sort=request.args.get('sort', 'modified_desc'),
+                )}
+            except ValueError as error:
+                return {'status': 'error', 'message': str(error)}, 400
+
+        @app.route('/api/upload/seasons')
+        @self.login_required
+        def upload_seasons_api():
+            account = str(request.args.get('account') or '').strip()
+            try:
+                return {'status': 'success', 'seasons': self.get_upload_account_seasons(account)}
+            except ValueError as error:
+                return {'status': 'error', 'message': str(error)}, 400
+            except Exception as error:
+                self.logger.warning('获取B站合集列表失败: %s', error)
+                return {'status': 'error', 'message': f'获取合集失败：{error}'}, 502
+
+        @app.route('/api/upload/submissions')
+        @self.login_required
+        def upload_submissions_api():
+            account = str(request.args.get('account') or '').strip()
+            try:
+                return {'status': 'success', 'submissions': self.get_upload_account_archives(account)}
+            except ValueError as error:
+                return {'status': 'error', 'message': str(error)}, 400
+            except Exception as error:
+                self.logger.warning('获取B站最近投稿失败: %s', error)
+                return {'status': 'error', 'message': f'获取最近投稿失败：{error}'}, 502
+
+        @app.route('/api/upload/submission')
+        @self.login_required
+        def upload_submission_api():
+            account = str(request.args.get('account') or '').strip()
+            bvid = str(request.args.get('bvid') or '').strip()
+            if not re.fullmatch(r'BV[a-zA-Z0-9]+', bvid):
+                return {'status': 'error', 'message': '请提供有效的 BV 号。'}, 400
+            try:
+                return {'status': 'success',
+                        'submission': self.get_upload_account_archive_detail(account, bvid)}
+            except ValueError as error:
+                return {'status': 'error', 'message': str(error)}, 400
+            except Exception as error:
+                self.logger.warning('获取B站稿件详情失败: %s', error)
+                return {'status': 'error', 'message': f'获取稿件详情失败：{error}'}, 502
+
+        @app.route('/api/upload/media')
+        @self.login_required
+        def upload_media_api():
+            real_path = os.path.realpath(request.args.get('path') or '')
+            if real_path not in self._upload_media_paths(refresh=False) or not os.path.isfile(real_path):
+                return {'status': 'error', 'message': '视频不存在或不属于上传素材库。'}, 404
+            mime_type = {
+                '.mkv': 'video/x-matroska', '.flv': 'video/x-flv', '.ts': 'video/mp2t',
+                '.m2ts': 'video/mp2t', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
+            }.get(os.path.splitext(real_path)[1].lower()) or mimetypes.guess_type(real_path)[0] or 'application/octet-stream'
+            return send_file(real_path, conditional=True, mimetype=mime_type,
+                             as_attachment=False, download_name=os.path.basename(real_path))
+
+        @app.route('/api/upload/cover/file', methods=['POST'])
+        @self.login_required
+        def upload_cover_file_api():
+            uploaded = request.files.get('cover')
+            if not uploaded or not uploaded.filename:
+                return {'status': 'error', 'message': '请选择封面图片。'}, 400
+            if request.content_length and request.content_length > 10 * 1024 * 1024:
+                return {'status': 'error', 'message': '封面图片不能超过 10MB。'}, 400
+            token = secrets.token_urlsafe(24)
+            raw_path = os.path.join(self.cover_artifact_dir, f'draft_{token}.upload')
+            output_path = os.path.join(self.cover_artifact_dir, f'draft_{token}.jpg')
+            try:
+                uploaded.save(raw_path)
+                if os.path.getsize(raw_path) > 10 * 1024 * 1024:
+                    raise ValueError('封面图片不能超过 10MB。')
+                self._normalize_cover(raw_path, output_path)
+                self._register_cover_token(token, output_path, 'uploaded')
+                return {'status': 'success', 'token': token,
+                        'preview_url': f'/api/upload/cover/media?token={token}'}
+            except Exception as error:
+                for path in (raw_path, output_path):
+                    if os.path.isfile(path):
+                        os.remove(path)
+                return {'status': 'error', 'message': f'封面图片无效: {error}'}, 400
+            finally:
+                if os.path.isfile(raw_path):
+                    os.remove(raw_path)
+
+        @app.route('/api/upload/cover/reference', methods=['POST'])
+        @self.login_required
+        def upload_cover_reference_api():
+            payload = request.get_json(silent=True) or {}
+            real_path = os.path.realpath(payload.get('path') or '')
+            if real_path not in self._upload_media_paths() or not os.path.isfile(real_path):
+                return {'status': 'error', 'message': '参考视频不存在或不允许访问。'}, 400
+            try:
+                second = float(payload.get('second') or 0)
+                duration = float(FFprobe.get_duration(real_path) or 0)
+                if not math.isfinite(second) or second < 0 or (duration > 0 and second >= duration):
+                    raise ValueError
+            except (TypeError, ValueError):
+                return {'status': 'error', 'message': '参考帧时间无效。'}, 400
+            token = secrets.token_urlsafe(24)
+            raw_path = os.path.join(self.cover_artifact_dir, f'reference_{token}.png')
+            output_path = os.path.join(self.cover_artifact_dir, f'reference_{token}.jpg')
+            ffmpeg = ToolsList.get('ffmpeg', auto_install=False) or 'ffmpeg'
+            try:
+                process = subprocess.run([
+                    ffmpeg, '-y', '-ss', f'{second:.3f}', '-i', real_path,
+                    '-frames:v', '1', '-vf', "scale='min(1280,iw)':-2", raw_path,
+                ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=45, check=False)
+                if process.returncode != 0 or not os.path.isfile(raw_path):
+                    raise RuntimeError(process.stdout.decode('utf-8', errors='ignore')[-600:])
+                self._normalize_cover(raw_path, output_path)
+                self._register_cover_token(token, output_path, 'reference',
+                                           {'source_path': real_path, 'second': second})
+                return {'status': 'success', 'token': token, 'second': second,
+                        'preview_url': f'/api/upload/cover/media?token={token}'}
+            except Exception as error:
+                if os.path.isfile(output_path):
+                    os.remove(output_path)
+                return {'status': 'error', 'message': f'截取参考帧失败: {error}'}, 400
+            finally:
+                if os.path.isfile(raw_path):
+                    os.remove(raw_path)
+
+        @app.route('/api/upload/cover/prompt', methods=['POST'])
+        @self.login_required
+        def upload_cover_prompt_api():
+            payload = request.get_json(silent=True) or {}
+            if not self.ai_client or not self.ai_client.available:
+                reason = (self.ai_client.availability().get('reason') if self.ai_client
+                          else '统一AI客户端不可用')
+                return {'status': 'error', 'message': reason}, 400
+            paths = [os.path.realpath(path) for path in (payload.get('paths') or [])]
+            allowed = self._upload_media_paths()
+            if not 1 <= len(paths) <= 100 or any(path not in allowed for path in paths):
+                return {'status': 'error', 'message': '待上传视频选择无效。'}, 400
+            title = str(payload.get('title') or '').strip()[:80]
+            current_desc = str(payload.get('desc') or '')[:2000]
+            current_dynamic = str(payload.get('dynamic') or '')[:233]
+            custom_prompt = str(payload.get('prompt') or '').strip()
+            if len(custom_prompt) > 2000:
+                return {'status': 'error', 'message': '补充提示词不能超过 2000 个字符。'}, 400
+            reference = self._resolve_cover_token(payload.get('reference_token'), kind='reference') \
+                if payload.get('reference_token') else None
+            if payload.get('reference_token') and not reference:
+                return {'status': 'error', 'message': '参考帧令牌无效或已过期。'}, 400
+            if reference and os.path.realpath(reference.get('source_path') or '') not in paths:
+                return {'status': 'error', 'message': '参考帧来源必须仍在待上传分P列表中。'}, 400
+            job_id = secrets.token_urlsafe(24)
+            with self.cover_job_lock:
+                self.cover_jobs[job_id] = {
+                    'type': 'prompt', 'status': 'queued', 'error': '', 'token': None,
+                    'prompt': '', 'metadata': {},
+                }
+            self.cover_executor.submit(
+                self._run_cover_prompt_generation, job_id, paths, title, current_desc,
+                current_dynamic, custom_prompt, reference,
+            )
+            return {'status': 'queued', 'job_id': job_id}
+
+        @app.route('/api/upload/cover/generate', methods=['POST'])
+        @self.login_required
+        def upload_cover_generate_api():
+            payload = request.get_json(silent=True) or {}
+            if not self.ai_client or not self.ai_client.available:
+                reason = (self.ai_client.availability().get('reason') if self.ai_client
+                          else '统一AI客户端不可用')
+                return {'status': 'error', 'message': reason}, 400
+            paths = [os.path.realpath(path) for path in (payload.get('paths') or [])]
+            allowed = self._upload_media_paths()
+            if not 1 <= len(paths) <= 100 or any(path not in allowed for path in paths):
+                return {'status': 'error', 'message': '待上传视频选择无效。'}, 400
+            confirmed_prompt = str(payload.get('confirmed_prompt') or '').strip()
+            if not confirmed_prompt:
+                return {'status': 'error', 'message': '请先确认完整生图提示词。'}, 400
+            if len(confirmed_prompt) > 8000:
+                return {'status': 'error', 'message': '完整生图提示词不能超过 8000 个字符。'}, 400
+            reference = self._resolve_cover_token(payload.get('reference_token'), kind='reference') \
+                if payload.get('reference_token') else None
+            if payload.get('reference_token') and not reference:
+                return {'status': 'error', 'message': '参考帧令牌无效或已过期。'}, 400
+            if reference and os.path.realpath(reference.get('source_path') or '') not in paths:
+                return {'status': 'error', 'message': '参考帧来源必须仍在待上传分P列表中。'}, 400
+            job_id = secrets.token_urlsafe(24)
+            with self.cover_job_lock:
+                self.cover_jobs[job_id] = {
+                    'type': 'image', 'status': 'queued', 'error': '', 'token': None,
+                    'prompt': confirmed_prompt,
+                }
+            self.cover_executor.submit(
+                self._run_cover_image_generation, job_id, confirmed_prompt, reference,
+            )
+            return {'status': 'queued', 'job_id': job_id}
+
+        @app.route('/api/upload/cover/generate/status')
+        @self.login_required
+        def upload_cover_generate_status_api():
+            job_id = request.args.get('job_id')
+            with self.cover_job_lock:
+                job = deepcopy(self.cover_jobs.get(job_id))
+            if not job:
+                return {'status': 'error', 'message': '生成任务不存在或已失效。'}, 404
+            if job.get('token'):
+                job['preview_url'] = f'/api/upload/cover/media?token={job["token"]}'
+            return job
+
+        @app.route('/api/upload/cover/media')
+        @self.login_required
+        def upload_cover_media_api():
+            record = self._resolve_cover_token(request.args.get('token'))
+            if not record:
+                return {'status': 'error', 'message': '封面不存在或令牌已过期。'}, 404
+            return send_file(record['path'], conditional=True, mimetype='image/jpeg')
+
+        @app.route('/api/upload/submit', methods=['POST'])
+        @self.login_required
+        def upload_submit_api():
+            payload = request.get_json(silent=True) or {}
+            submitted_parts = payload.get('parts')
+            if submitted_parts is None:
+                submitted_parts = [{'path': path} for path in (payload.get('paths') or [])]
+            if not isinstance(submitted_parts, list) or not 1 <= len(submitted_parts) <= 100:
+                return {'status': 'error', 'message': '请选择 1 至 100 个视频文件。'}, 400
+            normalized_parts = []
+            for part in submitted_parts:
+                if not isinstance(part, dict) or not part.get('path'):
+                    return {'status': 'error', 'message': '分P信息无效。'}, 400
+                path = os.path.realpath(part['path'])
+                part_title = (str(part.get('title')).strip() if 'title' in part
+                              else os.path.splitext(os.path.basename(path))[0])
+                if not part_title or len(part_title) > 80:
+                    return {'status': 'error', 'message': '每个分P名称必须为 1 至 80 个字符。'}, 400
+                normalized_parts.append({'path': path, 'title': part_title})
+            allowed = self._upload_media_paths()
+            real_paths = [part['path'] for part in normalized_parts]
+            if len(set(real_paths)) != len(real_paths) or any(path not in allowed for path in real_paths):
+                return {'status': 'error', 'message': '包含重复、无效或不允许上传的文件。'}, 400
+            mode = payload.get('mode', 'new')
+            bvid = str(payload.get('bvid') or '').strip()
+            if mode not in ('new', 'append') or (mode == 'append' and not re.fullmatch(r'BV[a-zA-Z0-9]+', bvid)):
+                return {'status': 'error', 'message': '追加分P时必须填写有效的 BV 号。'}, 400
+            loaded_bvid = str(payload.get('submission_loaded_bvid') or '').strip()
+            if mode == 'append' and loaded_bvid.casefold() != bvid.casefold():
+                return {'status': 'error', 'message': '请先成功读取目标稿件的完整信息，再提交追加。'}, 400
+            title = str(payload.get('title') or '').strip()
+            if not title:
+                return {'status': 'error', 'message': '投稿必须填写标题。'}, 400
+            if len(title) > 80:
+                return {'status': 'error', 'message': '投稿标题不能超过 80 个字符。'}, 400
+            account = str(payload.get('account') or 'bilibili')
+            if account not in self.get_upload_accounts():
+                return {'status': 'error', 'message': '上传账号不存在。'}, 400
+            try:
+                tid = int(payload.get('tid') or 21)
+                copyright_type = int(payload.get('copyright') or 1)
+                season_id = int(payload.get('season_id')) if payload.get('season_id') else None
+                scheduled_at = float(payload.get('scheduled_at') or 0)
+            except (TypeError, ValueError):
+                return {'status': 'error', 'message': '分区、稿件类型、合集或定时发布参数无效。'}, 400
+            if tid <= 0 or copyright_type not in (1, 2) or (season_id is not None and season_id <= 0):
+                return {'status': 'error', 'message': '分区、稿件类型或合集 ID 无效。'}, 400
+            source = str(payload.get('source') or '').strip()
+            if copyright_type == 2 and not source:
+                return {'status': 'error', 'message': '转载稿件必须填写转载来源。'}, 400
+            if not math.isfinite(scheduled_at):
+                return {'status': 'error', 'message': '定时发布时间无效。'}, 400
+            cover_record = self._resolve_cover_token(payload.get('cover_token')) \
+                if payload.get('cover_token') else None
+            if payload.get('cover_token') and not cover_record:
+                return {'status': 'error', 'message': '所选封面不存在或已过期。'}, 400
+            if mode == 'append' and cover_record and payload.get('cover_replace_confirmed') is not True:
+                return {'status': 'error', 'message': '追加分P替换原稿封面必须显式确认。'}, 400
+            files = []
+            for index, part in enumerate(normalized_parts):
+                path = part['path']
+                duration = FFprobe.get_duration(path)
+                ctime = datetime.fromtimestamp(os.path.getmtime(path))
+                files.append(VideoInfo(path=path, file_id=uuid(), dtype='web_upload',
+                                       size=os.path.getsize(path), duration=duration, ctime=ctime,
+                                       title=part['title'], segment_id=index + 1))
+            if scheduled_at and scheduled_at <= time.time() + 9000:
+                return {'status': 'error', 'message': '定时发布时间必须至少晚于当前时间 2.5 小时。'}, 400
+            dtime = max(0, int(scheduled_at - files[0].ctime.timestamp())) if scheduled_at else 0
+            request_id = uuid()
+            managed_artifacts = []
+            managed_cover = None
+            if cover_record:
+                managed_cover = os.path.join(self.cover_artifact_dir, f'task_{request_id}.jpg')
+                shutil.copy2(cover_record['path'], managed_cover)
+                managed_artifacts.append(managed_cover)
+            args = merge_dict(self.get_upload_defaults(), {
+                'account': account, 'title': title, 'desc': str(payload.get('desc') or ''),
+                'dynamic': str(payload.get('dynamic') or ''), 'tag': str(payload.get('tag') or ''),
+                'tid': tid, 'copyright': copyright_type, 'source': source,
+                'is_only_self': 1 if payload.get('is_only_self') else 0, 'dtime': dtime,
+                'scheduled_at': int(scheduled_at) if scheduled_at else 0,
+                'season_id': season_id,
+                'section_title': str(payload.get('section_title') or ''),
+                'episode_title': str(payload.get('episode_title') or ''),
+                'insert_head': bool(payload.get('insert_head')), 'bvid': bvid if mode == 'append' else None,
+                'update_metadata': mode == 'append', 'sync_season': mode == 'append',
+                'realtime': False, 'concat_video': False,
+            })
+            args.pop('cover_auto', None)
+            args.pop('cover', None)
+            args.pop('cover_required', None)
+            if managed_cover:
+                args['cover'] = managed_cover
+                args['cover_required'] = True
+            self.send_queue.put(PipeMessage(
+                source='engine', target='uploader', event='newtask', request_id=request_id,
+                data={'taskname': 'Web上传中心', 'files': files, 'engine': 'biliwebapi',
+                      'stateless': True, 'upload_group': f'web_upload_{request_id}', 'args': args,
+                      'managed_artifacts': managed_artifacts},
+            ))
+            return {'status': 'success', 'request_id': request_id, 'part_count': len(files)}
 
         @app.route('/api/highlight/sessions')
         @self.login_required
@@ -305,6 +664,41 @@ class WebApi:
                 return {'status': 'error', 'message': '文件不存在或不属于该热点任务。'}, 404
             return send_file(real_path, conditional=True)
 
+        @app.route('/api/highlight/thumbnail')
+        @self.login_required
+        def highlight_thumbnail_api():
+            manifest_path, media_path = request.args.get('manifest'), request.args.get('path')
+            allowed = self._highlight_media_paths(manifest_path)
+            real_path = os.path.realpath(media_path or '')
+            if real_path not in allowed or not os.path.isfile(real_path):
+                return {'status': 'error', 'message': '文件不存在或不属于该热点任务。'}, 404
+            try:
+                stat = os.stat(real_path)
+                cache_key = hashlib.sha256(
+                    f'{real_path}|{stat.st_size}|{stat.st_mtime_ns}'.encode('utf-8')
+                ).hexdigest()
+                cache_dir = os.path.realpath(os.path.join('.temp', 'highlight-thumbnails'))
+                thumbnail_path = os.path.join(cache_dir, f'{cache_key}.jpg')
+                with self.highlight_thumbnail_lock:
+                    if not os.path.isfile(thumbnail_path):
+                        os.makedirs(cache_dir, exist_ok=True)
+                        temporary_path = os.path.join(cache_dir, f'{cache_key}.part.jpg')
+                        command = [
+                            ToolsList.get('ffmpeg') or 'ffmpeg', '-hide_banner', '-loglevel', 'error',
+                            '-y', '-ss', '0.5', '-i', real_path, '-frames:v', '1',
+                            '-vf', 'scale=480:-2', '-q:v', '4', temporary_path,
+                        ]
+                        result = subprocess.run(command, capture_output=True, timeout=30, check=False)
+                        if result.returncode != 0 or not os.path.isfile(temporary_path):
+                            if os.path.isfile(temporary_path):
+                                os.remove(temporary_path)
+                            message = result.stderr.decode('utf-8', errors='replace').strip()
+                            raise RuntimeError(message or '无法提取视频预览图。')
+                        os.replace(temporary_path, thumbnail_path)
+                return send_file(thumbnail_path, mimetype='image/jpeg', conditional=True, max_age=86400)
+            except Exception as error:
+                return {'status': 'error', 'message': f'生成预览图失败: {error}'}, 500
+
         @app.route('/api/highlight/recompose', methods=['POST'])
         @self.login_required
         def highlight_recompose_api():
@@ -326,9 +720,10 @@ class WebApi:
                 versions = manifest.setdefault('versions', [])
                 used_numbers = [int(match.group(1)) for item in versions
                                 if (match := re.fullmatch(r'custom-v(\d+)', str(item.get('id', ''))))]
-                version_id = f"custom-v{max(used_numbers, default=1) + 1}"
+                version_id = f"custom-v{max(used_numbers, default=0) + 1}"
                 extension = os.path.splitext(paths[0])[1] or '.mp4'
-                output = safe_filename(os.path.join(os.path.dirname(manifest_path), f'{version_id}{extension}'))
+                version_name, file_stem = self._highlight_output_name(payload.get('output_name'), version_id)
+                output = safe_filename(os.path.join(os.path.dirname(manifest_path), f'{file_stem}{extension}'))
                 highlight_info = next((info for info in self.engine.task_dict.values()
                                        if info.get('task_type') == 'highlight'), None)
                 highlight_task = (highlight_info or {}).get('class')
@@ -338,7 +733,7 @@ class WebApi:
                                   getattr(highlight_task, 'config', {}).get('defaults', {}).get('encoding', {}))
                 from DMR.Highlight.cutter import recompose_clips, write_manifest
                 recompose_clips(paths, output, config, self.logger)
-                record = {'id': version_id, 'path': output, 'clip_ids': clip_ids,
+                record = {'id': version_id, 'name': version_name, 'path': output, 'clip_ids': clip_ids,
                           'duration': sum(float(clip_map[value].get('duration', 0)) for value in clip_ids),
                           'uploaded': False, 'created_at': datetime.now().isoformat()}
                 versions.append(record)
@@ -346,6 +741,57 @@ class WebApi:
                 return {'status': 'success', 'version': record}
             except Exception as error:
                 self.logger.exception('热点片段重新拼接失败')
+                return {'status': 'error', 'message': str(error)}, 400
+
+        @app.route('/api/highlight/recompose/multi', methods=['POST'])
+        @self.login_required
+        def highlight_recompose_multi_api():
+            payload = request.get_json(silent=True) or {}
+            materials = payload.get('materials') or []
+            if not isinstance(materials, list) or not 1 <= len(materials) <= 100:
+                return {'status': 'error', 'message': '请选择 1 至 100 个热点小片段。'}, 400
+            try:
+                resolved = []
+                for material in materials:
+                    manifest_path = material.get('manifest') if isinstance(material, dict) else None
+                    manifest = self._read_highlight_manifest(manifest_path)
+                    clip_id = str(material.get('clip_id'))
+                    clip = next((item for item in manifest.get('clips') or []
+                                 if str(item.get('id')) == clip_id), None)
+                    if not clip or os.path.realpath(clip.get('path', '')) not in self._highlight_media_paths(manifest_path):
+                        raise ValueError(f'热点小片段不存在: {clip_id}')
+                    resolved.append({'manifest': os.path.realpath(manifest_path), 'clip': clip})
+                host_path = resolved[0]['manifest']
+                host = self._read_highlight_manifest(host_path)
+                versions = host.setdefault('versions', [])
+                used_numbers = [int(match.group(1)) for item in versions
+                                if (match := re.fullmatch(r'custom-v(\d+)', str(item.get('id', ''))))]
+                version_id = f'custom-v{max(used_numbers, default=0) + 1}'
+                extension = os.path.splitext(resolved[0]['clip']['path'])[1] or '.mp4'
+                version_name, file_stem = self._highlight_output_name(payload.get('output_name'), version_id)
+                output = safe_filename(os.path.join(os.path.dirname(host_path), f'{file_stem}{extension}'))
+                highlight_info = next((info for info in self.engine.task_dict.values()
+                                       if info.get('task_type') == 'highlight'), None)
+                highlight_task = (highlight_info or {}).get('class')
+                job = next((item for item in getattr(highlight_task, 'jobs', {}).values()
+                            if os.path.realpath(item.get('manifest') or '') == host_path), None)
+                config = deepcopy((job or {}).get('config', {}).get('encoding') or
+                                  getattr(highlight_task, 'config', {}).get('defaults', {}).get('encoding', {}))
+                from DMR.Highlight.cutter import recompose_clips, write_manifest
+                recompose_clips([item['clip']['path'] for item in resolved], output, config, self.logger)
+                record = {
+                    'id': version_id, 'name': version_name, 'path': output,
+                    'clip_ids': [str(item['clip']['id']) for item in resolved],
+                    'materials': [{'manifest': item['manifest'], 'clip_id': str(item['clip']['id'])}
+                                  for item in resolved],
+                    'duration': sum(float(item['clip'].get('duration', 0)) for item in resolved),
+                    'uploaded': False, 'created_at': datetime.now().isoformat(),
+                }
+                versions.append(record)
+                write_manifest(host_path, host)
+                return {'status': 'success', 'version': record}
+            except Exception as error:
+                self.logger.exception('跨热点场次片段拼接失败')
                 return {'status': 'error', 'message': str(error)}, 400
 
         @app.route('/api/highlight/artifact/delete', methods=['POST'])
@@ -917,6 +1363,17 @@ class WebApi:
             raise ValueError('热点清单版本不受支持。')
         return manifest
 
+    @staticmethod
+    def _highlight_output_name(requested_name, version_id):
+        """Return the user-facing remix name and a filesystem-safe stem."""
+        name = str(requested_name or '').strip()
+        if len(name) > 80:
+            raise ValueError('混剪名称不能超过 80 个字符。')
+        if not name:
+            name = version_id
+        file_stem = replace_invalid_chars(name).strip().rstrip('. ')
+        return name, file_stem or version_id
+
     def _highlight_media_paths(self, manifest_path):
         try:
             manifest = self._read_highlight_manifest(manifest_path)
@@ -955,6 +1412,7 @@ class WebApi:
                                 'approved_candidate_count': len(manifest.get('selected_candidates') or []),
                                 'clips': manifest.get('clips') or [], 'outputs': manifest.get('outputs') or [],
                                 'versions': manifest.get('versions') or []})
+        results.sort(key=lambda item: item.get('created_at') or '', reverse=True)
         return results
 
     def get_highlight_sessions(self):
@@ -997,6 +1455,531 @@ class WebApi:
                 })
         sessions.sort(key=lambda item: item.get('started_at') or '', reverse=True)
         return sessions
+
+    def get_upload_account_files(self):
+        accounts = {}
+        for path in glob.glob(os.path.join('.login_info', '*.json')):
+            try:
+                with open(path, 'r', encoding='utf-8') as file:
+                    payload = json.load(file)
+                cookies = (payload.get('cookie_info') or {}).get('cookies') or []
+                cookie_names = {str(item.get('name')) for item in cookies if isinstance(item, dict)}
+                if {'SESSDATA', 'bili_jct'}.issubset(cookie_names):
+                    accounts[os.path.splitext(os.path.basename(path))[0]] = os.path.realpath(path)
+            except Exception:
+                continue
+        return accounts
+
+    def get_upload_accounts(self):
+        return sorted(self.get_upload_account_files())
+
+    def get_upload_account_seasons(self, account):
+        account_files = self.get_upload_account_files()
+        cookie_file = account_files.get(account)
+        if not cookie_file:
+            raise ValueError('上传账号不存在或登录信息无效。')
+        from DMR.Uploader.biliapi.biliapi import get_seasons
+        raw_seasons, page = [], 1
+        while True:
+            response = get_seasons(cookie_file, page=page, page_size=100)
+            if response.get('code') != 0:
+                raise RuntimeError(response.get('message') or response)
+            data = response.get('data') or {}
+            page_items = data.get('seasons') or []
+            raw_seasons.extend(page_items)
+            try:
+                total = int(data.get('total') or len(raw_seasons))
+            except (TypeError, ValueError):
+                total = len(raw_seasons)
+            if not page_items or len(raw_seasons) >= total:
+                break
+            page += 1
+            if page > 100:
+                raise RuntimeError('合集数量异常，已停止继续翻页。')
+        seasons, seen = [], set()
+        for item in raw_seasons:
+            season = item.get('season') if isinstance(item, dict) else None
+            if not isinstance(season, dict):
+                continue
+            try:
+                season_id = int(season.get('id'))
+            except (TypeError, ValueError):
+                continue
+            if season_id in seen:
+                continue
+            seen.add(season_id)
+            seasons.append({'id': season_id, 'name': str(season.get('title') or f'合集 {season_id}')})
+        return seasons
+
+    def get_upload_account_archives(self, account, limit=30):
+        account_files = self.get_upload_account_files()
+        cookie_file = account_files.get(account)
+        if not cookie_file:
+            raise ValueError('上传账号不存在或登录信息无效。')
+        from DMR.Uploader.biliapi.biliapi import get_archives
+        response = get_archives(cookie_file, page=1, page_size=min(max(int(limit), 1), 100), status='pubed')
+        if response.get('code') != 0:
+            raise RuntimeError(response.get('message') or response)
+        submissions = []
+        for item in (response.get('data') or {}).get('arc_audits') or []:
+            archive = item.get('Archive') if isinstance(item, dict) else None
+            if not isinstance(archive, dict) or not archive.get('bvid'):
+                continue
+            timestamp = archive.get('ptime') or archive.get('dtime') or archive.get('ctime') or 0
+            try:
+                timestamp = int(timestamp)
+            except (TypeError, ValueError):
+                timestamp = 0
+            submissions.append({
+                'bvid': str(archive['bvid']), 'title': str(archive.get('title') or archive['bvid']),
+                'published_at': datetime.fromtimestamp(timestamp).isoformat() if timestamp > 0 else None,
+                'timestamp': timestamp, 'duration': int(archive.get('duration') or 0),
+            })
+        submissions.sort(key=lambda item: item['timestamp'], reverse=True)
+        return submissions[:limit]
+
+    def get_upload_account_archive_detail(self, account, bvid):
+        account_files = self.get_upload_account_files()
+        cookie_file = account_files.get(account)
+        if not cookie_file:
+            raise ValueError('上传账号不存在或登录信息无效。')
+        from DMR.Uploader.biliapi.biliapi import get_archive_view
+        from DMR.Uploader.biliapi.bili_section import find_video_season
+        response = get_archive_view(cookie_file, bvid)
+        if response.get('code') != 0:
+            raise RuntimeError(response.get('message') or response)
+        data = response.get('data') or {}
+        archive = data.get('archive') or {}
+        if not archive or str(archive.get('bvid') or '').casefold() != str(bvid).casefold():
+            raise RuntimeError('平台未返回目标稿件的编辑信息。')
+        membership = find_video_season(cookie_file, bvid) or {}
+        try:
+            dtime = int(archive.get('dtime') or 0)
+        except (TypeError, ValueError):
+            dtime = 0
+        subtitle = data.get('subtitle') or {}
+        attrs = archive.get('attrs') or {}
+        return {
+            'bvid': str(archive.get('bvid') or bvid),
+            'title': str(archive.get('title') or ''),
+            'desc': str(archive.get('desc') or ''),
+            'dynamic': str(archive.get('dynamic') or ''),
+            'tag': str(archive.get('tag') or ''),
+            'tid': int(archive.get('tid') or 21),
+            'copyright': int(archive.get('copyright') or 1),
+            'source': str(archive.get('source') or ''),
+            'cover': str(archive.get('cover') or ''),
+            'scheduled_at': dtime if dtime > time.time() else 0,
+            'is_only_self': bool(archive.get('is_only_self')),
+            'open_subtitle': bool(subtitle.get('allow')),
+            'dolby': int(attrs.get('is_dolby') or 0),
+            'no_reprint': int(archive.get('no_reprint') or 0),
+            'charging_pay': int(archive.get('charging_pay') or 0),
+            'season_id': membership.get('season_id'),
+            'season_title': str(membership.get('season_title') or ''),
+            'section_title': str(membership.get('section_title') or ''),
+            'episode_title': str(membership.get('episode_title') or archive.get('title') or ''),
+        }
+
+    def get_upload_defaults(self):
+        defaults = {
+            'engine': 'biliwebapi', 'account': 'bilibili', 'retry': 3, 'timeout': 0,
+            'limit': 3, 'line': None, 'task_upload_lock': True, 'realtime': False,
+            'concat_video': False, 'copyright': 1, 'source': '', 'tid': 21, 'title': '', 'desc': '',
+            'dynamic': '', 'tag': '直播回放,热点剪辑', 'open_subtitle': False,
+            'dolby': 0, 'hires': 0, 'no_reprint': 0, 'is_only_self': 0,
+            'charging_pay': 0, 'no_disturbance': 0, 'season_id': None,
+            'section_title': '', 'episode_title': '', 'extra_kwargs': {},
+        }
+        if self.engine:
+            info = next((item for item in self.engine.task_dict.values()
+                         if item.get('task_type') == 'highlight'), None)
+            common = (((getattr((info or {}).get('class'), 'config', {}) or {}).get('defaults') or {})
+                      .get('upload') or {}).get('common') or {}
+            defaults = merge_dict(defaults, deepcopy(common))
+        defaults.pop('cookies', None)
+        defaults['engine'] = 'biliwebapi'
+        return defaults
+
+    @staticmethod
+    def _normalize_cover(source_path, output_path):
+        with Image.open(source_path) as image:
+            image.load()
+            if image.width * image.height > 40_000_000:
+                raise ValueError('图片像素总量不能超过 4000 万。')
+            if image.format not in ('JPEG', 'PNG', 'WEBP'):
+                raise ValueError('仅支持 JPEG、PNG 或 WebP。')
+            image = ImageOps.exif_transpose(image).convert('RGB')
+            image = ImageOps.fit(image, (1280, 800), method=Image.Resampling.LANCZOS)
+            image.save(output_path, 'JPEG', quality=92, optimize=True)
+        return output_path
+
+    def _register_cover_token(self, token, path, kind, metadata=None):
+        real_path = os.path.realpath(path)
+        if os.path.commonpath((self.cover_artifact_dir, real_path)) != self.cover_artifact_dir:
+            raise ValueError('封面文件不在受管理目录中。')
+        with self.cover_token_lock:
+            self.cover_tokens[token] = {
+                'path': real_path, 'kind': kind, 'created_at': time.time(), **(metadata or {}),
+            }
+
+    def _resolve_cover_token(self, token, kind=None):
+        if not token:
+            return None
+        with self.cover_token_lock:
+            record = deepcopy(self.cover_tokens.get(str(token)))
+        if not record or (kind and record.get('kind') != kind):
+            return None
+        if time.time() - float(record.get('created_at', 0)) > 24 * 3600:
+            return None
+        real_path = os.path.realpath(record.get('path') or '')
+        try:
+            managed = os.path.commonpath((self.cover_artifact_dir, real_path)) == self.cover_artifact_dir
+        except ValueError:
+            managed = False
+        return record if managed and os.path.isfile(real_path) else None
+
+    def _highlight_source_text(self, manifest, manifest_path):
+        """读取热点清单对应的主播名称和已有字幕，不触发新的转写。"""
+        streamer_name = str(manifest.get('streamer_name') or '').strip()
+        source_segments = list(manifest.get('source_segments') or [])
+        if self.engine and (not source_segments or not streamer_name):
+            target = os.path.realpath(manifest_path or '')
+            for info in self.engine.task_dict.values():
+                if info.get('task_type') != 'highlight':
+                    continue
+                job = next((value for value in getattr(info.get('class'), 'jobs', {}).values()
+                            if os.path.realpath(value.get('manifest') or '') == target), None)
+                if not job:
+                    continue
+                if not source_segments:
+                    offset = 0.0
+                    for segment in sorted(job.get('segments') or [],
+                                          key=lambda value: value.get('segment_id', 0)):
+                        video = segment.get('video') or segment.get('source_video')
+                        duration = float(getattr(video, 'duration', 0) or 0)
+                        if duration <= 0 and getattr(video, 'path', None):
+                            duration = float(FFprobe.get_duration(video.path) or 0)
+                        source_segments.append({
+                            'offset': offset, 'duration': duration,
+                            'subtitle': segment.get('subtitle'),
+                        })
+                        offset += duration
+                if not streamer_name:
+                    for segment in job.get('segments') or []:
+                        video = segment.get('video') or segment.get('source_video')
+                        streamer = getattr(video, 'streamer', None)
+                        streamer_name = str(
+                            (streamer.get('name') if isinstance(streamer, dict)
+                             else getattr(streamer, 'name', None)) or ''
+                        ).strip()
+                        if streamer_name:
+                            break
+                break
+        streamer_name = streamer_name or str(manifest.get('source_task') or '').strip()
+        subtitles = []
+        from DMR.Highlight.analyzer import parse_srt
+        for segment in source_segments:
+            subtitle = segment.get('subtitle')
+            if subtitle and not isinstance(subtitle, str):
+                subtitle = getattr(subtitle, 'path', None)
+            try:
+                subtitles.extend(parse_srt(subtitle, float(segment.get('offset') or 0)))
+            except (TypeError, ValueError, OSError):
+                continue
+        return streamer_name, subtitles
+
+    def _cover_hotspot_context(self, paths, reference_path=None, max_chars=3500):
+        selected = {os.path.realpath(path): index for index, path in enumerate(paths)}
+        contexts = []
+        for result in self.get_highlight_results():
+            try:
+                manifest = self._read_highlight_manifest(result.get('manifest'))
+            except Exception:
+                continue
+            streamer_name, subtitles = self._highlight_source_text(manifest, result.get('manifest'))
+            clips = {str(item.get('id')): item for item in manifest.get('clips') or []}
+            candidates = {str(item.get('id')): item
+                          for item in (manifest.get('analysis') or {}).get('candidates') or []}
+            source_sets = []
+            for clip_id, clip in clips.items():
+                source_sets.append((clip.get('path'), [clip_id]))
+            initial_ids = [str(value) for value in (manifest.get('initial_mix') or {}).get('clip_ids') or []]
+            for output in manifest.get('outputs') or []:
+                source_sets.append((output.get('path'), initial_ids))
+            for version in manifest.get('versions') or []:
+                source_sets.append((version.get('path'), [str(value) for value in version.get('clip_ids') or []]))
+            for media_path, clip_ids in source_sets:
+                real_media = os.path.realpath(media_path or '')
+                if real_media not in selected:
+                    continue
+                for clip_id in clip_ids:
+                    clip, candidate = clips.get(clip_id, {}), candidates.get(clip_id, {})
+                    representative = candidate.get('representative') or candidate.get('representative_texts') or []
+                    candidate_start = float(candidate.get('start', clip.get('requested_start')) or 0)
+                    candidate_end = float(candidate.get('end', clip.get('requested_end')) or candidate_start)
+                    nearby_subtitles = candidate.get('subtitle_excerpt') or [
+                        line for line in subtitles
+                        if float(line.get('end', 0)) > candidate_start - 6
+                        and float(line.get('start', 0)) < candidate_end + 6
+                    ][:20]
+                    contexts.append({
+                        'priority': 0 if reference_path and real_media == os.path.realpath(reference_path) else 1,
+                        'order': selected[real_media], 'id': clip_id,
+                        'streamer_name': streamer_name,
+                        'title': clip.get('title') or candidate.get('ai_title') or '',
+                        'category': clip.get('ai_category') or clip.get('category') or candidate.get('category') or '',
+                        'confidence': clip.get('ai_confidence'),
+                        'reason': clip.get('ai_reason') or candidate.get('ai_reason') or '',
+                        'start': candidate_start, 'end': candidate_end,
+                        'representative': representative[:8],
+                        'subtitles': nearby_subtitles[:12],
+                    })
+        contexts.sort(key=lambda item: (item['priority'], item['order']))
+        lines, seen = [], set()
+        for item in contexts:
+            unique = (item['order'], item['id'])
+            if unique in seen:
+                continue
+            seen.add(unique)
+            subtitle_text = ' / '.join(
+                f"[{float(value.get('start', 0)):.1f}s] {str(value.get('text') or '').strip()[:120]}"
+                for value in item['subtitles'] if str(value.get('text') or '').strip()
+            )[:1000]
+            line = (
+                f"主播：{item['streamer_name'] or '未知'}；热点 {item['id']}；"
+                f"标题：{item['title'] or '未命名'}；类别：{item['category'] or '未知'}；"
+                f"时间：{item['start']}-{item['end']}秒；置信度：{item['confidence']}；"
+                f"理由：{item['reason'] or '无'}；代表弹幕：{'、'.join(map(str, item['representative'])) or '无'}；"
+                f"附近字幕正文：{subtitle_text or '无'}"
+            )
+            if sum(len(value) + 1 for value in lines) + len(line) > max_chars:
+                break
+            lines.append(line)
+        return '\n'.join(lines)
+
+    def _run_cover_prompt_generation(self, job_id, paths, title, current_desc,
+                                     current_dynamic, custom_prompt, reference):
+        def update(**values):
+            with self.cover_job_lock:
+                if job_id in self.cover_jobs:
+                    self.cover_jobs[job_id].update(values)
+        try:
+            update(status='analyzing')
+            reference_path = reference.get('source_path') if reference else None
+            hotspot = self._cover_hotspot_context(paths, reference_path=reference_path)
+            material_names = '、'.join(os.path.splitext(os.path.basename(path))[0] for path in paths[:12])
+            base_prompt = (
+                '请为这次B站热点直播切片投稿，一次性生成标题、简介、动态文案和16:10中文封面的完整生图提示词。\n'
+                f'当前投稿标题：{title or "未填写"}\n当前简介：{current_desc or "未填写"}\n'
+                f'当前动态：{current_dynamic or "未填写"}\n'
+                f'视频素材：{material_names}\n热点资料：\n{hotspot or "没有可用的热点资料"}\n'
+                f'用户补充要求：{custom_prompt or "无"}\n'
+                '生成风格要求：\n'
+                '1. 标题像真实热门直播切片，优先抓住一个最有传播力的具体事件、反转、反应或金句；建议18至32个汉字。'
+                '已提供主播名称时自然带出主播名；附近字幕中若有语出惊人、反差强烈或能独立成立的原话，可优先提炼为亮点。'
+                '引用台词必须忠于字幕正文，不得补写字幕中没有的话。可使用口语化悬念，但不要标题党，'
+                '不要编造主播、游戏、人物、结果或台词。\n'
+                '2. 禁止“高能混剪、精彩瞬间、不容错过、震撼来袭、全程高能、笑不活了”等空泛套话；'
+                '不要堆叠感叹号、书名号、标签和关键词，不要把素材文件名机械拼进标题。\n'
+                '3. 简介只写2至4个短句：一句交代发生了什么，一句点出最好看的看点；有多段时可再概括一行。'
+                '不要写运营分析、创作说明、免责声明或冗长背景。\n'
+                '4. 动态只写一句自然口语，直接抛出最大看点，引导点开即可；不要重复整段简介，不要自动添加话题标签。\n'
+                '5. 标题不超过80字，简介不超过2000字，动态不超过233字。信息不足时宁可保守概括，不得虚构。\n'
+                '6. 封面提示词必须具体描述主体、动作、场景、表情、构图、光色和文字排版。封面大字控制在4至10个汉字，'
+                '可从真实字幕金句或热点反应中提炼，不要直接照搬投稿标题；画面醒目清晰、主体突出，避免元素堆砌。'
+                '不要使用真实平台Logo、二维码或虚构真人脸。'
+            )
+            if reference:
+                base_prompt += '\n生图时会附带视频参考帧，请参考其内容、构图和场景氛围，但不要直接复刻。'
+            content = self.ai_client.chat('cover_analysis', [
+                {'role': 'system', 'content': (
+                    '你是熟悉中文直播热点切片的短视频编辑。写法要具体、短、像人写的，'
+                    '核心是准确提炼这段直播为什么值得点开，不使用模板化运营套话。'
+                    '用户补充要求优先，但不能据此虚构素材中没有的事实。只返回一个JSON对象，不要Markdown。格式必须是：'
+                    '{"title":"投稿标题","desc":"投稿简介","dynamic":"动态文案",'
+                    '"cover_prompt":"可直接用于AI生图的完整提示词"}'
+                )},
+                {'role': 'user', 'content': base_prompt},
+            ]).strip()
+            content = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.I | re.S).strip()
+            try:
+                generated = json.loads(content)
+            except json.JSONDecodeError:
+                match = re.search(r'\{.*\}', content, re.S)
+                generated = json.loads(match.group(0)) if match else None
+            if not isinstance(generated, dict) or not str(generated.get('cover_prompt') or '').strip():
+                raise ValueError('AI未返回有效的标题、简介、动态和封面提示词JSON。')
+            metadata = {
+                'title': str(generated.get('title') or title).strip()[:80],
+                'desc': str(generated.get('desc') or current_desc).strip()[:2000],
+                'dynamic': str(generated.get('dynamic') or current_dynamic).strip()[:233],
+            }
+            final_prompt = str(generated['cover_prompt']).strip()[:8000]
+            update(status='completed', prompt=final_prompt, metadata=metadata)
+        except Exception as error:
+            self.logger.exception('上传中心AI封面提示词生成失败')
+            update(status='failed', error=str(error))
+
+    def _run_cover_image_generation(self, job_id, confirmed_prompt, reference):
+        def update(**values):
+            with self.cover_job_lock:
+                if job_id in self.cover_jobs:
+                    self.cover_jobs[job_id].update(values)
+        try:
+            update(status='generating')
+            b64_image = self.ai_client.generate_image(
+                confirmed_prompt, '1536x1024', reference_image=reference.get('path') if reference else None,
+            )
+            if b64_image.lstrip().startswith('data:'):
+                b64_image = b64_image.split(',', 1)[1]
+            token = secrets.token_urlsafe(24)
+            raw_path = os.path.join(self.cover_artifact_dir, f'generated_{token}.png')
+            output_path = os.path.join(self.cover_artifact_dir, f'generated_{token}.jpg')
+            try:
+                with open(raw_path, 'wb') as file:
+                    file.write(base64.b64decode(b64_image))
+                self._normalize_cover(raw_path, output_path)
+            finally:
+                if os.path.isfile(raw_path):
+                    os.remove(raw_path)
+            self._register_cover_token(token, output_path, 'generated')
+            update(status='completed', token=token, prompt=confirmed_prompt)
+        except Exception as error:
+            self.logger.exception('上传中心AI封面生成失败')
+            update(status='failed', error=str(error))
+
+    def get_known_seasons(self):
+        seasons = set()
+        def walk(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == 'season_id' and item:
+                        try:
+                            seasons.add(int(item))
+                        except (TypeError, ValueError):
+                            pass
+                    else:
+                        walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+        if self.engine:
+            for info in self.engine.task_dict.values():
+                walk(getattr(info.get('class'), 'config', {}))
+        return [{'id': value, 'name': f'合集 {value}'} for value in sorted(seasons)]
+
+    def get_upload_library(self, refresh=False):
+        with self.upload_library_lock:
+            if (not refresh and self.upload_library_cache['time'] and
+                    time.monotonic() - self.upload_library_cache['time'] < 15):
+                return list(self.upload_library_cache['items'])
+            items = self._build_upload_library()
+            self.upload_library_cache = {'time': time.monotonic(), 'items': items}
+            return list(items)
+
+    def _build_upload_library(self):
+        items, seen = [], set()
+        def add(path, kind, taskname, group, title, duration=0, created_at=None):
+            path = getattr(path, 'path', path)
+            if not path or not os.path.isfile(path):
+                return
+            real = os.path.realpath(path)
+            if real in seen:
+                return
+            seen.add(real)
+            stat = os.stat(real)
+            default_part_title = (title if str(kind).startswith('highlight_') and title
+                                  else os.path.splitext(os.path.basename(real))[0])
+            items.append({'path': real, 'kind': kind, 'taskname': taskname, 'group': group,
+                          'title': title or os.path.basename(real),
+                          'part_title': str(default_part_title)[:80],
+                          'duration': max(0, float(duration or 0)), 'size': stat.st_size,
+                          'modified_at': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                          'modified_ts': stat.st_mtime,
+                          'created_at': created_at or datetime.fromtimestamp(stat.st_mtime).isoformat()})
+        if self.engine:
+            for task_key, info in self.engine.task_dict.items():
+                if info.get('task_type', 'replay') != 'replay':
+                    continue
+                taskname = info.get('name', task_key.split('/', 1)[-1])
+                event = getattr(info.get('class'), 'event_class', None)
+                for session_id, session in getattr(event, 'completed_sessions', {}).items():
+                    group = f'{taskname} · {session.get("started_at") or session_id}'
+                    for state in session.get('video_states', []):
+                        for dtype, label in (('src_video', '原始录屏'), ('src_video_pre', '转码前录屏'),
+                                             ('dm_video', '弹幕版录屏')):
+                            video = (state.get(dtype) or {}).get('file')
+                            add(video, dtype, taskname, group,
+                                f'{label} · {os.path.basename(getattr(video, "path", ""))}',
+                                getattr(video, 'duration', 0))
+            for result in self.get_highlight_results():
+                taskname = result.get('source_task') or result.get('taskname') or '热点任务'
+                group = f'{"自动" if result.get("run_type") == "automatic" else "手动"}热点 · {result.get("display_name")}'
+                for output in result.get('outputs') or []:
+                    add(output.get('path'), 'highlight_mix', taskname, group, '热点混剪成片',
+                        output.get('duration'), result.get('created_at'))
+                for clip in result.get('clips') or []:
+                    add(clip.get('path'), 'highlight_clip', taskname, group,
+                        clip.get('title') or f'热点小片段 {clip.get("sequence") or clip.get("id")}',
+                        clip.get('duration'), result.get('created_at'))
+                for version in result.get('versions') or []:
+                    add(version.get('path'), 'highlight_version', taskname, group,
+                        f'自定义混剪 {version.get("name") or version.get("id")}',
+                        version.get('duration'), version.get('created_at'))
+        items.sort(key=lambda item: item.get('modified_ts', 0), reverse=True)
+        return items
+
+    def query_upload_library(self, page=1, page_size=24, taskname='', kind='*', query='', sort='modified_desc'):
+        try:
+            page, page_size = int(page), int(page_size)
+        except (TypeError, ValueError):
+            raise ValueError('分页参数无效。')
+        if page < 1 or not 1 <= page_size <= 100:
+            raise ValueError('页码必须大于0，每页数量必须在1到100之间。')
+        sorters = {
+            'modified_desc': (lambda item: item.get('modified_ts', 0), True),
+            'modified_asc': (lambda item: item.get('modified_ts', 0), False),
+            'name_asc': (lambda item: (item.get('title') or '').casefold(), False),
+            'name_desc': (lambda item: (item.get('title') or '').casefold(), True),
+        }
+        if sort not in sorters:
+            raise ValueError('排序方式无效。')
+        records = self.get_upload_library()
+        task_counts = {}
+        for item in records:
+            name = item.get('taskname') or '未归属任务'
+            task_counts[name] = task_counts.get(name, 0) + 1
+        taskname = str(taskname or '').strip()
+        scoped = [item for item in records if not taskname or item.get('taskname') == taskname]
+        kind_counts = {}
+        for item in scoped:
+            item_kind = item.get('kind') or 'unknown'
+            kind_counts[item_kind] = kind_counts.get(item_kind, 0) + 1
+        kind = str(kind or '*')
+        if kind != '*':
+            scoped = [item for item in scoped if item.get('kind') == kind]
+        query = str(query or '').strip().casefold()
+        if query:
+            scoped = [item for item in scoped if query in ' '.join((
+                str(item.get('title') or ''), str(item.get('group') or ''),
+                str(item.get('taskname') or ''), os.path.basename(item.get('path') or ''),
+            )).casefold()]
+        key, reverse = sorters[sort]
+        scoped.sort(key=key, reverse=reverse)
+        total = len(scoped)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        start = (page - 1) * page_size
+        return {
+            'items': scoped[start:start + page_size], 'page': page, 'page_size': page_size,
+            'total': total, 'pages': pages,
+            'tasknames': [{'name': name, 'count': count} for name, count in sorted(task_counts.items())],
+            'kinds': [{'kind': name, 'count': count} for name, count in sorted(kind_counts.items())],
+        }
+
+    def _upload_media_paths(self, refresh=True):
+        return {os.path.realpath(item['path']) for item in self.get_upload_library(refresh=refresh)}
 
     def get_replay_task_names(self):
         if not self.engine:
@@ -1140,6 +2123,7 @@ class WebApi:
 
     def stop(self):
         self.stoped = True
+        self.cover_executor.shutdown(wait=False, cancel_futures=True)
         if self.webserver:
             self.webserver.shutdown()
             self.webserver.server_close()

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import tempfile
+from types import SimpleNamespace
 
 from DMR.utils import ToolsList, replace_keywords, safe_filename, uuid
 
@@ -182,6 +183,7 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
                 aligned_pieces = {}
                 break
     clip_records, clip_paths = [], {}
+    selected_ids = {str(item.get("id")) for item in selected}
     for index, candidate in enumerate(sorted(candidates, key=lambda item: item["start"]), 1):
         clip_id = str(candidate.get("id") or f"clip-{index:03d}")
         pieces = aligned_pieces.get(clip_id) if outward else None
@@ -207,6 +209,13 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
         record = {"id": clip_id, "sequence": index, "path": filename,
                   "category": candidate.get("category"),
                   "score": candidate.get("score", 0), "title": candidate.get("ai_title", ""),
+                  "ai_reviewed": candidate.get("ai_reviewed", False),
+                  "ai_keep": candidate.get("ai_keep", True),
+                  "ai_status": candidate.get("ai_status", "disabled"),
+                  "ai_confidence": candidate.get("ai_confidence"),
+                  "ai_category": candidate.get("ai_category"),
+                  "ai_reason": candidate.get("ai_reason", ""),
+                  "auto_selected": clip_id in selected_ids,
                   "requested_start": candidate["start"], "requested_end": candidate["end"],
                   "effective_start": effective_start, "effective_end": effective_end,
                   "duration": effective_end - effective_start, "encoding_mode": effective_mode}
@@ -235,7 +244,29 @@ def render_highlight(segments, candidates, selected, output_dir, base_info, conf
 
 def recompose_clips(paths, output, config, logger):
     ffmpeg = config.get("ffmpeg") or ToolsList.get("ffmpeg") or "ffmpeg"
-    _concat(paths, output, ffmpeg, logger)
+    signatures = [_stream_signature(path) for path in paths]
+    if len(set(signatures)) == 1:
+        try:
+            _concat(paths, output, ffmpeg, logger)
+            return output
+        except Exception:
+            logger.warning("热点素材媒体参数无法直接拼接，自动统一编码。", exc_info=True)
+    first_streams = _probe(paths[0]).get("streams") or []
+    first_video = next((stream for stream in first_streams if stream.get("codec_type") == "video"), {})
+    base_info = SimpleNamespace(resolution=(first_video.get("width") or 1920, first_video.get("height") or 1080))
+    with tempfile.TemporaryDirectory(prefix="dmr-highlight-remix-", dir=".temp") as temp_dir:
+        normalized = []
+        extension = os.path.splitext(output)[1] or ".mp4"
+        for index, path in enumerate(paths):
+            duration_info = _probe(path, "format=duration").get("format") or {}
+            duration = float(duration_info.get("duration") or 0)
+            if duration <= 0:
+                raise RuntimeError(f"无法取得热点素材时长: {path}")
+            normalized_path = os.path.join(temp_dir, f"{index:03d}{extension}")
+            _encode_piece({"path": path, "start": 0.0, "end": duration}, normalized_path,
+                          ffmpeg, config, base_info, logger)
+            normalized.append(normalized_path)
+        _concat(normalized, output, ffmpeg, logger)
     return output
 
 

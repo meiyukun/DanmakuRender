@@ -8,6 +8,7 @@ import logging
 
 from .engine import DMREngine
 from .Config import Config
+from .AI import AIClient
 from .utils import filename_to_taskname
 
 
@@ -18,7 +19,8 @@ class DanmakuRender():
         self.kwargs = kwargs
         self.stoped = True
         self.engine_args = self.config.get_config('dmr_engine_args')
-        self.engine = DMREngine()
+        self.ai_client = AIClient(self.config.get_config('ai'))
+        self.engine = DMREngine(ai_client=self.ai_client)
         self._restart_lock = threading.Lock()
         self._restart_requested = False
         self._restart_mode = 'idle'

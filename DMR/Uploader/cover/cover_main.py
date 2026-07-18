@@ -10,7 +10,7 @@ from DMR.utils.utils import replace_keywords_all
 logger = logging.getLogger(__name__)
 
 
-def fix_cover(config, video_info):
+def fix_cover(config, video_info, ai_client=None):
     if config.get("cover") != '':
         return
     cover_auto = config.get('cover_auto')
@@ -26,7 +26,7 @@ def fix_cover(config, video_info):
 
     if cover_auto.get('ai', {}).get('enabled', False):
         try:
-            ai_cover = generate_ai_cover(files, first_video, cover_auto)
+            ai_cover = generate_ai_cover(files, first_video, cover_auto, ai_client=ai_client)
             if ai_cover:
                 config['cover'] = ai_cover
                 logger.info("已生成AI封面: %s", ai_cover)

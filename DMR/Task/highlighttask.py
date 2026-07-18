@@ -16,10 +16,11 @@ class HighlightTask:
 
     task_type = 'highlight'
 
-    def __init__(self, taskname, config, pipe):
+    def __init__(self, taskname, config, pipe, ai_client=None):
         self.send_queue, self.recv_queue = pipe
         self.taskname = taskname
         self.config = config
+        self.ai_client = ai_client
         self.logger = logging.getLogger(f'DMR.HighlightTask.{taskname}')
         self.stoped = True
         self.jobs = {}
@@ -32,6 +33,7 @@ class HighlightTask:
         self.worker = Highlight(
             (self._worker_send, self._worker_recv),
             nhighlights=runtime.get('max_workers', 1), state_name=state_id,
+            ai_client=ai_client,
         )
         self._load_state()
 
@@ -321,10 +323,10 @@ class HighlightTask:
             processor_config['output_dir'] = os.path.join(
                 os.path.dirname(job['segments'][0]['video'].path), f'高能混剪-{self.taskname}'
             )
-        if job.get('manual'):
-            processor_config['output_dir'] = os.path.join(
-                processor_config['output_dir'], f'{job["group_id"]}-manual-{job["run_id"]}'
-            )
+        run_suffix = f'manual-{job["run_id"]}' if job.get('manual') else 'automatic'
+        processor_config['output_dir'] = os.path.join(
+            processor_config['output_dir'], f'{job["group_id"]}-{run_suffix}'
+        )
         self._worker_recv.put(PipeMessage(
             source=f'highlight/{self.taskname}', target='highlight', event='newtask', request_id=job['request_id'],
             data={'taskname': self.taskname, 'source_task': job['source_task'],

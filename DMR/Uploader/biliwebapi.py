@@ -40,6 +40,8 @@ class BiliWebApi:
         limit=3,
         sort_videos:bool=False,
         insert_head:bool=False,
+        bvid:str=None,
+        ai_client=None,
         **kwargs,
     ):
         self.cookies = cookies
@@ -48,6 +50,7 @@ class BiliWebApi:
         self.limit = limit
         self.sort_videos = sort_videos
         self.insert_head = insert_head
+        self.ai_client = ai_client
 
         self.app_key = 'ae57252b0c09105d'
         self.appsec = 'c75875c596a69eb55bd119e74b07cfe3'
@@ -69,6 +72,10 @@ class BiliWebApi:
         self.refresh_token = login_info['token_info']['refresh_token']
 
         self.videos = None
+        if bvid:
+            self.videos = self.get_remote_data(bvid)
+            if not self.videos:
+                raise RuntimeError(f'无法取得已有稿件 {bvid}，已停止追加分P。')
         self.stoped = False
 
 
@@ -157,7 +164,9 @@ class BiliWebApi:
             no_disturbance=config.get('no_disturbance', 0),
             extra_kwargs=config.get('extra_kwargs', {}),
         )
-        if config.get('dtime') and config['dtime'] >= 14400:
+        if config.get('scheduled_at'):
+            video.delay_time(int(config['scheduled_at']))
+        elif config.get('dtime') and config['dtime'] >= 14400:
             video.delay_time(int(video_info.ctime.timestamp() + config['dtime']))
         if config.get('title'):
             video.title = replace_keywords(config['title'], video_info)
@@ -195,6 +204,8 @@ class BiliWebApi:
                 video.cover = self.cover_up(cover_file)
 
             except Exception as e:
+                if config.get('cover_required'):
+                    raise RuntimeError(f'用户所选封面上传失败: {e}') from e
                 logger.error(f'视频 {config["title"]} 封面图片下载失败: {e}, 跳过设置.')
                 video.cover = ''
         return video
@@ -229,20 +240,51 @@ class BiliWebApi:
             # 自动创建封面
             if kwargs.get('cover_auto'):
                 from DMR.Uploader.cover.cover_main import fix_cover
-                fix_cover(kwargs, files)
+                fix_cover(kwargs, files, ai_client=self.ai_client)
                 cover = kwargs.get('cover')
                 if cover:
                     self.videos.cover =self.cover_up(cover)
 
         else:
             self.videos = self.get_remote_data(self.videos.bvid) or self.videos       # 刷新视频信息
+            if kwargs.get('update_metadata'):
+                self.videos.title = str(kwargs.get('title') or '')[:80]
+                self.videos.desc = str(kwargs.get('desc') or '')
+                self.videos.desc_v2 = [{
+                    'raw_text': self.videos.desc, 'biz_id': '', 'type': 1,
+                }]
+                self.videos.dynamic = str(kwargs.get('dynamic') or '')
+                tag = kwargs.get('tag') or ''
+                self.videos.tag = ','.join(map(str, tag)) if isinstance(tag, list) else str(tag)
+                self.videos.tid = int(kwargs.get('tid') or self.videos.tid)
+                self.videos.copyright = int(kwargs.get('copyright') or self.videos.copyright)
+                self.videos.source = str(kwargs.get('source') or '')
+                self.videos.is_only_self = int(bool(kwargs.get('is_only_self')))
+            if kwargs.get('cover'):
+                try:
+                    self.videos.cover = self.cover_up(kwargs['cover'])
+                except Exception as error:
+                    if kwargs.get('cover_required'):
+                        raise RuntimeError(f'用户所选封面上传失败: {error}') from error
+                    logger.warning('追加分P封面上传失败，将保留原稿封面: %s', error)
+            if kwargs.get('sync_season'):
+                from DMR.Uploader.biliapi.bili_section import sync_video_season
+                season_result = sync_video_season(
+                    self.cookies_path, self.videos.bvid, kwargs.get('season_id'),
+                    kwargs.get('section_title') or '',
+                    kwargs.get('episode_title') or self.videos.title,
+                )
+                logger.info('同步已有稿件合集信息: %s', season_result)
         if stream_queue is None:
-            for file in files:
+            # 插到稿件开头时，每次上传都会插入索引 0；倒序处理才能保留 Web 中选择的分P顺序。
+            ordered_files = reversed(files) if self.insert_head else files
+            for file in ordered_files:
                 status, info = self.upload_file(
                     filepath=file.path,
                     lines=kwargs.get('line', 'AUTO'),
                     videos=self.videos,
-                    submit_api='web'
+                    submit_api='web',
+                    part_title=file.title if getattr(file, 'dtype', None) == 'web_upload' else None,
                 )
             # self.submit(submit_api='web', videos=self.videos)
                 
@@ -253,7 +295,8 @@ class BiliWebApi:
                 total_size=30*1024*1024*1024,
                 lines=kwargs.get('line', 'AUTO'),
                 videos=self.videos,
-                submit_api='web'
+                submit_api='web',
+                part_title=files[0].title if getattr(files[0], 'dtype', None) == 'web_upload' else None,
             )
 
         ret = self.submit(submit_api='web',videos=self.videos)
@@ -350,6 +393,7 @@ class BiliWebApi:
         lines='AUTO',
         videos: 'Data'=None,
         submit_api: Callable[[str], None] = None,
+        part_title: str = None,
     ):
         status, message = self.upload_stream(
             stream_queue=filepath,
@@ -358,6 +402,7 @@ class BiliWebApi:
             lines=lines,
             videos=videos,
             submit_api=submit_api,
+            part_title=part_title,
         )
         return status, message
 
@@ -369,6 +414,7 @@ class BiliWebApi:
         lines='AUTO',
         videos: 'Data'=None,
         submit_api: Callable[[str], None] = None,
+        part_title: str = None,
     ):
 
         logger.info(f"{file_name} 开始上传")
@@ -425,7 +471,7 @@ class BiliWebApi:
         if video_part is None:
             # stop_event.set()
             return False, '分P上传失败'
-        video_part['title'] = video_part['title'][:80]
+        video_part['title'] = (part_title or video_part['title'])[:80]
 
 
         # 如果insert_head为True，则将新的视频插入到列表头部
